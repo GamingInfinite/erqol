@@ -284,7 +284,7 @@ struct ActionTarget {
 
 impl ActionTarget {
     fn new(return_state: *mut State) -> Self {
-        let mut target = Self {
+        Self {
             true_expr: [0x41, 0xa1],
             return_transition: Transition {
                 target_state: return_state,
@@ -300,17 +300,22 @@ impl ActionTarget {
                 exit_events: Span::null(),
                 while_events: Span::null(),
             },
+        }
+    }
+
+    /// Fixes up the self-referential spans now that the target lives at a
+    /// stable (leaked heap) address. Setting these before the move would leave
+    /// them pointing at the dead stack copy of the struct.
+    fn link(&mut self) {
+        self.return_transition.evaluator = Span {
+            ptr: self.true_expr.as_mut_ptr(),
+            len: self.true_expr.len(),
         };
-        target.return_transition.evaluator = Span {
-            ptr: target.true_expr.as_mut_ptr(),
-            len: target.true_expr.len(),
+        self.transition_arr = [&mut self.return_transition as *mut Transition];
+        self.state.transitions = Span {
+            ptr: self.transition_arr.as_mut_ptr(),
+            len: self.transition_arr.len(),
         };
-        target.transition_arr = [&mut target.return_transition as *mut Transition];
-        target.state.transitions = Span {
-            ptr: target.transition_arr.as_mut_ptr(),
-            len: target.transition_arr.len(),
-        };
-        target
     }
 }
 
@@ -390,6 +395,7 @@ impl SubMenu {
             opt.transition.target_state = match opt.action {
                 Some(action) => {
                     let target = Box::into_raw(Box::new(ActionTarget::new(return_state)));
+                    unsafe { (*target).link() };
                     let action_state = unsafe { &mut (*target).state } as *mut State;
                     register_action(action_state, action);
                     action_state

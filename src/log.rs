@@ -51,3 +51,18 @@ pub fn log(msg: impl AsRef<str>) {
         let _ = writeln!(file, "{}", msg.as_ref());
     }
 }
+
+/// Lock-free append to `logs/crash.log` used by the VEH crash handler. Opens a
+/// fresh handle per call so it cannot deadlock on the `log()` mutex if the
+/// crash happened while that mutex was held.
+pub(crate) fn crash_log(msg: impl AsRef<str>) {
+    let path = DLL_PATH
+        .get()
+        .and_then(|p| p.parent())
+        .map(|dir| dir.join("logs").join("crash.log"));
+    if let Some(path) = path
+        && let Some(mut file) = open_log(&path)
+    {
+        let _ = writeln!(file, "{}", msg.as_ref());
+    }
+}

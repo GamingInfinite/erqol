@@ -55,6 +55,21 @@ fn is_rune(param_id: u32) -> bool {
     RUNE_IDS.contains(&param_id)
 }
 
+/// Known param IDs for every remembrance goods item (boss memories). The runes
+/// granted per item are always read live from the game's `EquipParamGoods`
+/// param (`sellValue`), same as rune items. IDs come from the player's own
+/// `regulation.bin` (v1.16.1 / DLC02).
+const REMEMBRANCE_IDS: &[u32] = &[
+    // Base game
+    2950, 2951, 2952, 2953, 2954, 2955, 2956, 2957, 2958, 2959, 2960, 2961, 2962, 2963, 2964,
+    // DLC
+    2002900, 2002901, 2002902, 2002903, 2002904, 2002905, 2002907, 2002908, 2002909, 2002910,
+];
+
+fn is_remembrance(param_id: u32) -> bool {
+    REMEMBRANCE_IDS.contains(&param_id)
+}
+
 /// Runes granted by a single item, read live from the game's param so mods
 /// that retune `sellValue` are respected.
 fn rune_value(param_id: u32) -> u64 {
@@ -66,12 +81,12 @@ fn rune_value(param_id: u32) -> u64 {
     0
 }
 
-// ---- Action ----
+// ---- Actions ----
 
-/// Runs on the game's main thread when the player picks "Consume Golden
-/// Runes". Sums every rune stack's value into `rune_count` and zeroes the
+/// Runs on the game's main thread when the player picks a consume option. Sums
+/// the value of every matching stack into the rune count and zeroes the
 /// consumed stacks.
-unsafe extern "C" fn consume_golden_runes_action() {
+unsafe fn consume_matching(is_target: impl Fn(u32) -> bool, label: &str) {
     let Some(game_data_man) = GameDataMan::instance_ptr().ok() else {
         log("consume_all_runes: GameDataMan unavailable");
         return;
@@ -94,7 +109,7 @@ unsafe extern "C" fn consume_golden_runes_action() {
         let items_data = &pgd.equipment.equip_inventory_data.items_data;
         for entry in items_data.items() {
             let id = entry.item_id.param_id();
-            if is_rune(id) {
+            if is_target(id) {
                 total_value += entry.quantity as u64 * rune_value(id);
                 consumed_count += entry.quantity as u64;
             }
@@ -102,7 +117,7 @@ unsafe extern "C" fn consume_golden_runes_action() {
     }
 
     if consumed_count == 0 {
-        log("consume_all_runes: no runes in inventory");
+        log(format!("consume_all_runes: no {label}s in inventory"));
         return;
     }
 
@@ -111,14 +126,24 @@ unsafe extern "C" fn consume_golden_runes_action() {
 
     let items_data = &pgd.equipment.equip_inventory_data.items_data;
     for entry in items_data.items_mut() {
-        if is_rune(entry.item_id.param_id()) {
+        if is_target(entry.item_id.param_id()) {
             entry.quantity = 0;
         }
     }
 
     log(format!(
-        "consume_all_runes: consumed {consumed_count} rune items for {total_value} runes"
+        "consume_all_runes: consumed {consumed_count} {label} items for {total_value} runes"
     ));
+}
+
+/// Runs on the game's main thread when the player picks "Consume Golden Runes".
+unsafe extern "C" fn consume_golden_runes_action() {
+    unsafe { consume_matching(is_rune, "rune") };
+}
+
+/// Runs on the game's main thread when the player picks "Consume Remembrances".
+unsafe extern "C" fn consume_remembrances_action() {
+    unsafe { consume_matching(is_remembrance, "remembrance") };
 }
 
 // ---- Feature wiring ----
@@ -156,7 +181,7 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
                 false,
                 Some(consume_golden_runes_action as SubMenuAction),
             ),
-            (2, MSG_CONSUME_REMEMBRANCES, false, None),
+            (2, MSG_CONSUME_REMEMBRANCES, false, Some(consume_remembrances_action as SubMenuAction)),
             (99, MSG_CANCEL, true, None),
         ])));
         let submenu_state = SubMenu::link(submenu, initial_state);
