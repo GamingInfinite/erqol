@@ -14,8 +14,9 @@ const ADD_TALK_LIST_DATA_ALT: Command = Command { bank: 5, id: 149 };
 const CLOSE_SHOP_MESSAGE: Command = Command { bank: 1, id: 12 };
 const CLEAR_TALK_LIST_DATA: Command = Command { bank: 1, id: 20 };
 const SHOW_SHOP_MESSAGE: Command = Command { bank: 1, id: 10 };
-
-const MSGBND_EVENT_TEXT_FOR_TALK: u32 = 33;
+/// `6:2147483647(...)` — the generic `OpenGenericDialog` sub-call.
+#[allow(dead_code)]
+const OPEN_GENERIC_DIALOG: Command = Command { bank: 6, id: 2147483647 };const MSGBND_EVENT_TEXT_FOR_TALK: u32 = 33;
 
 const MSG_SORT_CHEST: i32 = 15000395;
 
@@ -468,6 +469,161 @@ impl SubMenu {
         this.branch_state.while_events = Span::null();
 
         &mut this.state as *mut State
+    }
+}
+
+// ---- Action states ----
+
+/// Builds a one-shot state that runs `action` when the state machine enters it
+/// (via the `ACTIONS` registry), then transitions to `return_state`. Leaked;
+/// returns a pointer to the state.
+#[allow(dead_code)]
+pub(crate) unsafe fn make_action_state(
+    action: SubMenuAction,
+    return_state: *mut State,
+) -> *mut State {
+    let target = Box::into_raw(Box::new(ActionTarget::new(return_state)));
+    unsafe { (*target).link() };
+    let action_state = unsafe { &mut (*target).state } as *mut State;
+    register_action(action_state, action);
+    action_state
+}
+
+// ---- The yes/no dialog ----
+
+/// A runtime-constructed yes/no confirmation dialog state, mirroring the game's
+/// own dialog states (e.g. the flask upgrade confirmations) byte for byte: the
+/// entry calls `6:2147483647` (the generic `OpenGenericDialog` sub-group) with
+/// `message_id`; the `#B9 == 0` OK branch leads to `yes_target` and the
+/// `#B9 != #BA` cancel branch to `no_target`.
+#[allow(dead_code)]
+pub(crate) struct YesNoDialog {
+    message_expr: [u8; 6],
+    message_args: [Span<u8>; 1],
+    open_event: Event,
+    ok_expr: [u8; 4],        // #B9 == 0
+    cancel_expr: [u8; 4],    // #B9 != #BA
+    true_expr: [u8; 2],      // if 1
+    ok_sub: Transition,
+    cancel_sub: Transition,
+    ok_sub_arr: [*mut Transition; 1],
+    cancel_sub_arr: [*mut Transition; 1],
+    ok_transition: Transition,
+    cancel_transition: Transition,
+    transitions: [*mut Transition; 2],
+    state: State,
+}
+
+#[allow(dead_code)]
+impl YesNoDialog {
+    pub(crate) fn new(message_id: i32, yes_target: *mut State, no_target: *mut State) -> Self {
+        Self {
+            message_expr: make_int_expression(message_id),
+            message_args: [Span::null(); 1],
+            open_event: Event {
+                command: OPEN_GENERIC_DIALOG,
+                args: Span::null(),
+            },
+            ok_expr: [0xb9, 0x40, 0x95, 0xa1],
+            cancel_expr: [0xb9, 0xba, 0x96, 0xa1],
+            true_expr: [0x41, 0xa1],
+            ok_sub: Transition {
+                target_state: yes_target,
+                pass_events: Span::null(),
+                sub_transitions: Span::null(),
+                evaluator: Span::null(),
+            },
+            cancel_sub: Transition {
+                target_state: no_target,
+                pass_events: Span::null(),
+                sub_transitions: Span::null(),
+                evaluator: Span::null(),
+            },
+            ok_sub_arr: [ptr::null_mut()],
+            cancel_sub_arr: [ptr::null_mut()],
+            ok_transition: Transition {
+                target_state: ptr::null_mut(),
+                pass_events: Span::null(),
+                sub_transitions: Span::null(),
+                evaluator: Span::null(),
+            },
+            cancel_transition: Transition {
+                target_state: ptr::null_mut(),
+                pass_events: Span::null(),
+                sub_transitions: Span::null(),
+                evaluator: Span::null(),
+            },
+            transitions: [ptr::null_mut(); 2],
+            state: State {
+                id: 0,
+                transitions: Span::null(),
+                entry_events: Span::null(),
+                exit_events: Span::null(),
+                while_events: Span::null(),
+            },
+        }
+    }
+
+    /// Fixes up every self-referential span now that the dialog lives at a
+    /// stable (leaked heap) address. Setting these before the move would leave
+    /// them pointing at the dead stack copy of the struct.
+    unsafe fn link(&mut self) {
+        self.message_args = [Span {
+            ptr: self.message_expr.as_mut_ptr(),
+            len: self.message_expr.len(),
+        }];
+        self.open_event.args = Span {
+            ptr: self.message_args.as_mut_ptr(),
+            len: self.message_args.len(),
+        };
+
+        self.ok_sub.evaluator = Span {
+            ptr: self.true_expr.as_mut_ptr(),
+            len: self.true_expr.len(),
+        };
+        self.cancel_sub.evaluator = Span {
+            ptr: self.true_expr.as_mut_ptr(),
+            len: self.true_expr.len(),
+        };
+        self.ok_sub_arr = [&mut self.ok_sub as *mut Transition];
+        self.cancel_sub_arr = [&mut self.cancel_sub as *mut Transition];
+
+        self.ok_transition.evaluator = Span {
+            ptr: self.ok_expr.as_mut_ptr(),
+            len: self.ok_expr.len(),
+        };
+        self.ok_transition.sub_transitions = Span {
+            ptr: self.ok_sub_arr.as_mut_ptr(),
+            len: self.ok_sub_arr.len(),
+        };
+        self.cancel_transition.evaluator = Span {
+            ptr: self.cancel_expr.as_mut_ptr(),
+            len: self.cancel_expr.len(),
+        };
+        self.cancel_transition.sub_transitions = Span {
+            ptr: self.cancel_sub_arr.as_mut_ptr(),
+            len: self.cancel_sub_arr.len(),
+        };
+
+        self.transitions = [
+            &mut self.ok_transition as *mut Transition,
+            &mut self.cancel_transition as *mut Transition,
+        ];
+        self.state.transitions = Span {
+            ptr: self.transitions.as_mut_ptr(),
+            len: self.transitions.len(),
+        };
+        self.state.entry_events = Span {
+            ptr: &self.open_event as *const Event as *mut Event,
+            len: 1,
+        };
+    }
+
+    /// Leaks the dialog and returns a pointer to its state.
+    pub(crate) unsafe fn into_state_ptr(dialog: Box<YesNoDialog>) -> *mut State {
+        let ptr = Box::into_raw(dialog);
+        unsafe { (*ptr).link() };
+        (unsafe { &mut (*ptr).state }) as *mut State
     }
 }
 
