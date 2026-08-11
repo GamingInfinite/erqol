@@ -13,6 +13,7 @@ mod consume_all_runes;
 mod ezstate_menu;
 mod log;
 mod scan;
+mod skip_flask_confirm;
 
 // ---- Crash logging (VEH) ----
 
@@ -179,6 +180,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 auto_pickup::AUTO_PICKUP_INSTALLER.call_once(auto_pickup::install_auto_pickup_hook);
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
                     consume_all_runes::init();
+                    skip_flask_confirm::init();
                     ezstate_menu::install();
                 });
             },

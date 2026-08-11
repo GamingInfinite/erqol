@@ -14,7 +14,6 @@ const ADD_TALK_LIST_DATA_ALT: Command = Command { bank: 5, id: 149 };
 const CLOSE_SHOP_MESSAGE: Command = Command { bank: 1, id: 12 };
 const CLEAR_TALK_LIST_DATA: Command = Command { bank: 1, id: 20 };
 const SHOW_SHOP_MESSAGE: Command = Command { bank: 1, id: 10 };
-const OPEN_REPOSITORY: Command = Command { bank: 1, id: 30 };
 
 const MSGBND_EVENT_TEXT_FOR_TALK: u32 = 33;
 
@@ -49,9 +48,9 @@ impl<T> Span<T> {
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct Command {
-    bank: i32,
-    id: i32,
+pub(crate) struct Command {
+    pub(crate) bank: i32,
+    pub(crate) id: i32,
 }
 
 #[repr(C)]
@@ -63,8 +62,8 @@ struct Event {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Transition {
-    target_state: *mut State,
+pub(crate) struct Transition {
+    pub(crate) target_state: *mut State,
     pass_events: Span<Event>,
     sub_transitions: Span<*mut Transition>,
     evaluator: Span<u8>,
@@ -176,17 +175,16 @@ unsafe fn is_grace_state_group(state_group: *mut StateGroup) -> bool {
     false
 }
 
-/// True if the transition targets a state that opens the storage chest.
-unsafe fn is_sort_chest_transition(transition: *mut Transition) -> bool {
+/// True if the transition's evaluator is `SetREG0(GetTalkListEntryResult()) == N`,
+/// the signature of the row-dispatch transition of a talk menu state.
+unsafe fn is_talk_list_result_transition(transition: *mut Transition) -> bool {
     if transition.is_null() {
         return false;
     }
-    let target = unsafe { (*transition).target_state };
-    if target.is_null() {
-        return false;
-    }
-    let entry_events = unsafe { slice_of((*target).entry_events) };
-    !entry_events.is_empty() && entry_events[0].command == OPEN_REPOSITORY
+    let evaluator = unsafe { (*transition).evaluator };
+    evaluator.len >= 2
+        && !evaluator.ptr.is_null()
+        && unsafe { *evaluator.ptr == 0x57 && *evaluator.ptr.add(1) == 0x84 }
 }
 
 // ---- The injected menu option ----
@@ -476,11 +474,13 @@ impl SubMenu {
 // ---- Patching ----
 
 /// Adds a menu option row to a grace state group's menu state and inserts its
-/// transition into the dispatch state. The option opens `target_state` when
-/// selected. Returns true if the state group was patched; the already-patched
-/// check (an existing `AddTalkListData` with `message_id`) makes later calls
-/// a no-op.
-pub(crate) unsafe fn patch_grace_menu(
+/// transition into the dispatch state, just before the default (`if 1`)
+/// fallback. The dispatch state is identified structurally by the
+/// `SetREG0(GetTalkListEntryResult())` evaluator prefix rather than any single
+/// menu's dispatch target. The option opens `target_state` when selected.
+/// Returns true if the state group was patched; the already-patched check (an
+/// existing `AddTalkListData` with `message_id`) makes later calls a no-op.
+pub(crate) unsafe fn splice_option(
     state_group: *mut StateGroup,
     option_index: i32,
     message_id: i32,
@@ -490,8 +490,7 @@ pub(crate) unsafe fn patch_grace_menu(
 
     let mut add_menu_state: Option<*mut State> = None;
     let mut event_index = -1i32;
-    let mut menu_transition_state: Option<*mut State> = None;
-    let mut transition_index = -1i32;
+    let mut dispatch_state: Option<*mut State> = None;
 
     for state in states {
         let state_ptr = state as *const State as *mut State;
@@ -510,21 +509,19 @@ pub(crate) unsafe fn patch_grace_menu(
             }
         }
 
-        for (i, transition) in unsafe { slice_of(state.transitions) }
-            .iter()
-            .enumerate()
-        {
-            if unsafe { is_sort_chest_transition(*transition) } {
-                menu_transition_state = Some(state_ptr);
-                transition_index = i as i32;
-                break;
+        if dispatch_state.is_none() {
+            for transition in unsafe { slice_of(state.transitions) } {
+                if unsafe { is_talk_list_result_transition(*transition) } {
+                    dispatch_state = Some(state_ptr);
+                    break;
+                }
             }
         }
     }
 
     let Some(add_menu_state) = add_menu_state else { return false };
-    let Some(menu_transition_state) = menu_transition_state else { return false };
-    if event_index == -1 || transition_index == -1 {
+    let Some(dispatch_state) = dispatch_state else { return false };
+    if event_index == -1 {
         return false;
     }
 
@@ -548,16 +545,24 @@ pub(crate) unsafe fn patch_grace_menu(
         };
     }
 
-    // Insert our transition into the dispatch state's transitions.
-    let old_transitions = unsafe { slice_of((*menu_transition_state).transitions) };
+    // Insert our transition into the dispatch state before the `if 1` default
+    // fallback so the numeric row checks keep their precedence.
+    let old_transitions = unsafe { slice_of((*dispatch_state).transitions) };
+    let mut insert_at = old_transitions.len();
+    for (i, transition) in old_transitions.iter().enumerate() {
+        if unsafe { get_ezstate_int_value((**transition).evaluator) } == 1 {
+            insert_at = i;
+            break;
+        }
+    }
     let mut new_transitions: Vec<*mut Transition> = Vec::with_capacity(old_transitions.len() + 1);
-    new_transitions.extend_from_slice(&old_transitions[..transition_index as usize]);
+    new_transitions.extend_from_slice(&old_transitions[..insert_at]);
     new_transitions.push(unsafe { (*option).transition_ptr() });
-    new_transitions.extend_from_slice(&old_transitions[transition_index as usize..]);
+    new_transitions.extend_from_slice(&old_transitions[insert_at..]);
     let transition_count = new_transitions.len();
     let transitions_ptr = Box::into_raw(new_transitions.into_boxed_slice()) as *mut *mut Transition;
     unsafe {
-        (*menu_transition_state).transitions = Span {
+        (*dispatch_state).transitions = Span {
             ptr: transitions_ptr,
             len: transition_count,
         };
@@ -566,11 +571,204 @@ pub(crate) unsafe fn patch_grace_menu(
     true
 }
 
+// ---- Transition redirection ----
+
+/// Redirects a transition's target state by rewriting the target pointer in
+/// place. The evaluator, pass events and sub-transitions are left untouched.
+pub(crate) unsafe fn redirect_transition(
+    transition: *mut Transition,
+    new_target: *mut State,
+) -> bool {
+    if transition.is_null() || new_target.is_null() {
+        return false;
+    }
+    unsafe {
+        (*transition).target_state = new_target;
+    }
+    true
+}
+
+// ---- Structural state group queries ----
+
+/// The group id read from the ESD file (`state_group.id`).
+pub(crate) unsafe fn state_group_id(state_group: *mut StateGroup) -> Option<i32> {
+    if state_group.is_null() {
+        return None;
+    }
+    Some(unsafe { (*state_group).id })
+}
+
+/// The target of a transition's highest-priority path: the transition's own
+/// target if set, otherwise the leaf target reached by following the first
+/// sub-transition at each level.
+pub(crate) unsafe fn leaf_transition_target(transition: *mut Transition) -> Option<*mut State> {
+    if transition.is_null() {
+        return None;
+    }
+    let target = unsafe { (*transition).target_state };
+    if !target.is_null() {
+        return Some(target);
+    }
+    let sub_transitions = unsafe { slice_of((*transition).sub_transitions) };
+    if sub_transitions.is_empty() {
+        return None;
+    }
+    unsafe { leaf_transition_target(sub_transitions[0]) }
+}
+
+/// True if the transition's own target, or any nested sub-transition's sub-tree,
+/// reaches `target`.
+pub(crate) unsafe fn transition_reaches(transition: *mut Transition, target: *mut State) -> bool {
+    if transition.is_null() || target.is_null() {
+        return false;
+    }
+    if unsafe { (*transition).target_state } == target {
+        return true;
+    }
+    for sub in unsafe { slice_of((*transition).sub_transitions) } {
+        if unsafe { transition_reaches(*sub, target) } {
+            return true;
+        }
+    }
+    false
+}
+
+/// The state at array position `index` within the group's state list.
+pub(crate) unsafe fn state_at_index(
+    state_group: *mut StateGroup,
+    index: usize,
+) -> Option<*mut State> {
+    if state_group.is_null() {
+        return None;
+    }
+    let states = unsafe { slice_of((*state_group).states) };
+    states.get(index).map(|s| s as *const State as *mut State)
+}
+
+/// True if the state is a plain pass-through: exactly one transition whose
+/// evaluator is constant-true, with a direct target and no sub-transitions.
+pub(crate) unsafe fn is_plain_true_state(state: *mut State) -> bool {
+    if state.is_null() {
+        return false;
+    }
+    let transitions = unsafe { slice_of((*state).transitions) };
+    if transitions.len() != 1 {
+        return false;
+    }
+    let transition = transitions[0];
+    if transition.is_null() || unsafe { (*transition).target_state.is_null() } {
+        return false;
+    }
+    if !unsafe { slice_of((*transition).sub_transitions) }.is_empty() {
+        return false;
+    }
+    unsafe { get_ezstate_int_value((*transition).evaluator) == 1 }
+}
+
+/// The confirm-dialog state of a flask group: the state whose highest-priority
+/// branch (`#B9 == 0`) resolves to `ok_target`. Returns the state and its OK
+/// transition.
+pub(crate) unsafe fn find_dialog_state(
+    state_group: *mut StateGroup,
+    ok_target: *mut State,
+) -> Option<(*mut State, *mut Transition)> {
+    if state_group.is_null() || ok_target.is_null() {
+        return None;
+    }
+    for state in unsafe { slice_of((*state_group).states) } {
+        for transition in unsafe { slice_of(state.transitions) } {
+            if unsafe { leaf_transition_target(*transition) } != Some(ok_target) {
+                continue;
+            }
+            let evaluator = unsafe { (**transition).evaluator };
+            if !evaluator.ptr.is_null()
+                && evaluator.len >= 1
+                && unsafe { *evaluator.ptr == 0xB9 }
+            {
+                return Some((state as *const State as *mut State, *transition));
+            }
+        }
+    }
+    None
+}
+
+/// The first transition owned by a state other than `target` whose sub-tree
+/// (own target or nested sub-transitions) reaches `target`. Returns the
+/// top-level transition so it can be rewritten in place.
+pub(crate) unsafe fn incoming_edge(
+    state_group: *mut StateGroup,
+    target: *mut State,
+) -> Option<*mut Transition> {
+    if state_group.is_null() || target.is_null() {
+        return None;
+    }
+    for state in unsafe { slice_of((*state_group).states) } {
+        if std::ptr::eq(state, target) {
+            continue;
+        }
+        for transition in unsafe { slice_of(state.transitions) } {
+            if unsafe { transition_reaches(*transition, target) } {
+                return Some(*transition);
+            }
+        }
+    }
+    None
+}
+
+/// A compact dump of a state group's runtime layout, used once per flask group
+/// to diagnose how commands and transitions are stored in memory.
+pub(crate) unsafe fn dump_state_group(state_group: *mut StateGroup) -> String {
+    if state_group.is_null() {
+        return "null".to_string();
+    }
+    let id = unsafe { (*state_group).id };
+    let states = unsafe { slice_of((*state_group).states) };
+    let mut out = format!("group {id} states.len={}", states.len());
+    for (i, state) in states.iter().take(30).enumerate() {
+        let events = unsafe { slice_of(state.entry_events) }
+            .iter()
+            .map(|e| format!("{}:{}", e.command.bank, e.command.id))
+            .collect::<Vec<_>>()
+            .join(",");
+        let transitions = unsafe { slice_of(state.transitions) }
+            .iter()
+            .map(|t| {
+                let t = *t;
+                if t.is_null() {
+                    return "null".to_string();
+                }
+                let target = unsafe { (*t).target_state };
+                let subs = unsafe { slice_of((*t).sub_transitions) }.len();
+                let evaluator = unsafe { (*t).evaluator };
+                let prefix = if evaluator.ptr.is_null() || evaluator.len == 0 {
+                    "[]".to_string()
+                } else {
+                    let n = evaluator.len.min(8);
+                    let bytes = unsafe { std::slice::from_raw_parts(evaluator.ptr, n) };
+                    bytes
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                format!("tgt={target:p} subs={subs} eval[{prefix}]")
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        out.push_str(&format!(
+            "\n  st[{i}] id={} ev=[{events}] trans=[{transitions}]",
+            state.id
+        ));
+    }
+    out
+}
+
 // ---- Feature registry ----
 
 type Patcher = unsafe fn(*mut StateGroup) -> bool;
 
 static PATCHERS: Mutex<Vec<Patcher>> = Mutex::new(Vec::new());
+static GROUP_PATCHERS: Mutex<Vec<Patcher>> = Mutex::new(Vec::new());
 static MESSAGES: Mutex<Vec<(i32, &'static [u16])>> = Mutex::new(Vec::new());
 
 /// A callback invoked on the game's main thread when the player selects a
@@ -597,6 +795,16 @@ pub(crate) fn register_patcher(patcher: Patcher) {
         .push(patcher);
 }
 
+/// Registers a patch routine that is run whenever *any* state group's initial
+/// state is entered, grace menus or not. The routine must check the group id
+/// itself and be idempotent.
+pub(crate) fn register_group_patcher(patcher: Patcher) {
+    GROUP_PATCHERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(patcher);
+}
+
 /// Registers a message text that `MsgRepositoryImp::LookupEntry` returns for
 /// `message_id` (talk message bound 33).
 pub(crate) fn register_message(message_id: i32, text: &'static [u16]) {
@@ -615,13 +823,20 @@ fn ezstate_enter_state_detour(regs: *mut Registers, original: usize) -> usize {
     if !machine.is_null() {
         unsafe {
             let state_group = (*machine).state_group;
-            if !state_group.is_null() && is_grace_state_group(state_group) {
-                if state == (*state_group).initial_state {
+            if !state_group.is_null() && state == (*state_group).initial_state {
+                if is_grace_state_group(state_group) {
                     let patchers = PATCHERS.lock().unwrap_or_else(|e| e.into_inner());
                     for patcher in patchers.iter() {
                         if patcher(state_group) {
                             log("ezstate_menu: patched site of grace menu");
                         }
+                    }
+                }
+
+                let group_patchers = GROUP_PATCHERS.lock().unwrap_or_else(|e| e.into_inner());
+                for patcher in group_patchers.iter() {
+                    if patcher(state_group) {
+                        log("ezstate_menu: patched state group transitions");
                     }
                 }
             }

@@ -4,7 +4,7 @@ use eldenring::cs::{EquipParamGoods, GameDataMan, SoloParamRepository};
 use fromsoftware_shared::FromStatic;
 
 use crate::ezstate_menu::{
-    patch_grace_menu, register_message, register_patcher, StateGroup, SubMenu, SubMenuAction,
+    register_message, register_patcher, splice_option, StateGroup, SubMenu, SubMenuAction,
 };
 use crate::log::log;
 
@@ -186,7 +186,7 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
         ])));
         let submenu_state = SubMenu::link(submenu, initial_state);
 
-        patch_grace_menu(
+        splice_option(
             state_group,
             OPTION_INDEX,
             MSG_CONSUME_ALL_RUNES,
