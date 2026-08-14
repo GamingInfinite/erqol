@@ -12,6 +12,8 @@ mod auto_pickup;
 mod consume_all_runes;
 mod ezstate_menu;
 mod log;
+mod dungeon_warp;
+mod map_in_combat;
 mod scan;
 mod skip_flask_confirm;
 
@@ -178,6 +180,8 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
         cs_task.run_recurring(
             |_: &FD4TaskData| {
                 auto_pickup::AUTO_PICKUP_INSTALLER.call_once(auto_pickup::install_auto_pickup_hook);
+                map_in_combat::MAP_IN_COMBAT_INSTALLER.call_once(map_in_combat::install);
+                dungeon_warp::patch();
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
                     consume_all_runes::init();
                     skip_flask_confirm::init();

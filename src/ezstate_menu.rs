@@ -1,7 +1,7 @@
 use std::ptr;
 use std::sync::{Mutex, Once};
 
-use ilhook::x64::{hook_closure_retn, CallbackOption, HookFlags, Registers};
+use ilhook::x64::{CallbackOption, HookFlags, Registers, hook_closure_retn};
 
 use crate::log::log;
 use crate::scan;
@@ -16,7 +16,11 @@ const CLEAR_TALK_LIST_DATA: Command = Command { bank: 1, id: 20 };
 const SHOW_SHOP_MESSAGE: Command = Command { bank: 1, id: 10 };
 /// `6:2147483647(...)` — the generic `OpenGenericDialog` sub-call.
 #[allow(dead_code)]
-const OPEN_GENERIC_DIALOG: Command = Command { bank: 6, id: 2147483647 };const MSGBND_EVENT_TEXT_FOR_TALK: u32 = 33;
+const OPEN_GENERIC_DIALOG: Command = Command {
+    bank: 6,
+    id: 2147483647,
+};
+const MSGBND_EVENT_TEXT_FOR_TALK: u32 = 33;
 
 const MSG_SORT_CHEST: i32 = 15000395;
 
@@ -24,8 +28,7 @@ const MSG_SORT_CHEST: i32 = 15000395;
 // Both end in `e8 $ '` so scan_pattern_call resolves the function the call
 // targets rather than the call site itself.
 
-const ENTER_STATE_PATTERN: &str =
-    "80 7e 18 00 74 15 4c 8d 44 24 40 48 8b d6 48 8b 4e 20 e8 $ '";
+const ENTER_STATE_PATTERN: &str = "80 7e 18 00 74 15 4c 8d 44 24 40 48 8b d6 48 8b 4e 20 e8 $ '";
 
 const LOOKUP_ENTRY_PATTERN: &str = "8b da 44 8b ca 33 d2 48 8b f9 44 8d 42 6f e8 $ '";
 
@@ -120,8 +123,15 @@ fn make_int_expression(value: i32) -> [u8; 6] {
 /// `GetTalkListEntryResult() == value`
 fn make_talk_list_result_expression(value: i32) -> [u8; 9] {
     [
-        0x57, 0x84, 0x82, value as u8, (value >> 8) as u8, (value >> 16) as u8,
-        (value >> 24) as u8, 0x95, 0xa1,
+        0x57,
+        0x84,
+        0x82,
+        value as u8,
+        (value >> 8) as u8,
+        (value >> 16) as u8,
+        (value >> 24) as u8,
+        0x95,
+        0xa1,
     ]
 }
 
@@ -129,8 +139,8 @@ fn make_talk_list_result_expression(value: i32) -> [u8; 9] {
 /// i.e. fires once the talk list menu has closed.
 const TALK_MENU_CLOSED_EXPR: [u8; 15] = [
     0x7b, 0x41, 0x40, 0x86, 0x41, 0x95, // menu open (1, 0) == 1
-    0x7a, 0x40, 0x85, 0x40, 0x95,       // generic dialog open (0) == 0
-    0x98, 0x40, 0x95, 0xa1,             // && (both) == 0
+    0x7a, 0x40, 0x85, 0x40, 0x95, // generic dialog open (0) == 0
+    0x98, 0x40, 0x95, 0xa1, // && (both) == 0
 ];
 
 /// Parses an ESD expression containing only a 1 or 4 byte integer.
@@ -501,9 +511,9 @@ pub(crate) struct YesNoDialog {
     message_expr: [u8; 6],
     message_args: [Span<u8>; 1],
     open_event: Event,
-    ok_expr: [u8; 4],        // #B9 == 0
-    cancel_expr: [u8; 4],    // #B9 != #BA
-    true_expr: [u8; 2],      // if 1
+    ok_expr: [u8; 4],     // #B9 == 0
+    cancel_expr: [u8; 4], // #B9 != #BA
+    true_expr: [u8; 2],   // if 1
     ok_sub: Transition,
     cancel_sub: Transition,
     ok_sub_arr: [*mut Transition; 1],
@@ -651,10 +661,7 @@ pub(crate) unsafe fn splice_option(
     for state in states {
         let state_ptr = state as *const State as *mut State;
 
-        for (i, event) in unsafe { slice_of(state.entry_events) }
-            .iter()
-            .enumerate()
-        {
+        for (i, event) in unsafe { slice_of(state.entry_events) }.iter().enumerate() {
             if unsafe { is_sort_chest_event(event) } {
                 add_menu_state = Some(state_ptr);
                 event_index = i as i32;
@@ -675,14 +682,23 @@ pub(crate) unsafe fn splice_option(
         }
     }
 
-    let Some(add_menu_state) = add_menu_state else { return false };
-    let Some(dispatch_state) = dispatch_state else { return false };
+    let Some(add_menu_state) = add_menu_state else {
+        return false;
+    };
+    let Some(dispatch_state) = dispatch_state else {
+        return false;
+    };
     if event_index == -1 {
         return false;
     }
 
     // Build and leak the main menu option that opens the submenu.
-    let option = Box::into_raw(Box::new(MenuOption::new(option_index, message_id, false, None)));
+    let option = Box::into_raw(Box::new(MenuOption::new(
+        option_index,
+        message_id,
+        false,
+        None,
+    )));
     unsafe {
         (*option).link();
         (*option).transition.target_state = target_state;
@@ -837,10 +853,7 @@ pub(crate) unsafe fn find_dialog_state(
                 continue;
             }
             let evaluator = unsafe { (**transition).evaluator };
-            if !evaluator.ptr.is_null()
-                && evaluator.len >= 1
-                && unsafe { *evaluator.ptr == 0xB9 }
-            {
+            if !evaluator.ptr.is_null() && evaluator.len >= 1 && unsafe { *evaluator.ptr == 0xB9 } {
                 return Some((state as *const State as *mut State, *transition));
             }
         }
@@ -1055,7 +1068,9 @@ fn install_enter_state_hook() {
         log("ezstate_menu: ERROR: EzState::EnterState signature not found");
         return;
     };
-    log(&format!("ezstate_menu: EzState::EnterState at {enter_state:#x}"));
+    log(&format!(
+        "ezstate_menu: EzState::EnterState at {enter_state:#x}"
+    ));
 
     match unsafe {
         hook_closure_retn(
