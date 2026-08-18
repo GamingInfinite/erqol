@@ -1,7 +1,9 @@
 use std::sync::Once;
 
-use ilhook::x64::{hook_closure_retn, CallbackOption, HookFlags, Registers};
+use ilhook::x64::Registers;
 
+use crate::config;
+use crate::hooks;
 use crate::scan;
 
 const AUTO_PICKUP_ITEM_IDS: &[i32] = &[
@@ -28,41 +30,44 @@ fn is_auto_pickup_id(entry_id: i32) -> bool {
 
 pub static AUTO_PICKUP_INSTALLER: Once = Once::new();
 
+fn auto_pickup_detour(regs: *mut Registers, original: usize) -> usize {
+    {
+        let cfg = config::config().lock().unwrap_or_else(|e| e.into_inner());
+        if !cfg.auto_pickup {
+            return call_original_proxy(regs, original);
+        }
+    }
+    let entry_id = unsafe { (*regs).rdx } as i32;
+    if is_auto_pickup_id(entry_id) {
+        return 1;
+    }
+    call_original_proxy(regs, original)
+}
+
+fn call_original_proxy(regs: *mut Registers, original: usize) -> usize {
+    // Pass through ALL register params and stack params from the original
+    // call. The proxy function reads r9b (4th param) and [rsp+0x48] (9th
+    // param via get_stack(9) from original RSP). Without forwarding all
+    // params, the original function gets garbage in R8/R9/stack → crashes.
+    let original_fn: extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64) -> i32 =
+        unsafe { std::mem::transmute(original) };
+    unsafe {
+        original_fn(
+            (*regs).rcx,
+            (*regs).rdx,
+            (*regs).r8,
+            (*regs).r9,
+            (*regs).get_stack(5),
+            (*regs).get_stack(6),
+            (*regs).get_stack(7),
+            (*regs).get_stack(8),
+            (*regs).get_stack(9),
+        ) as usize
+    }
+}
+
 pub fn install_auto_pickup_hook() {
     let proxy_addr = find_execute_action_button_proxy()
-        .expect("ExecuteActionButtonParamProxy not found") as usize;
-
-    let handle = unsafe {
-        hook_closure_retn(
-            proxy_addr,
-            |regs: *mut Registers, original: usize| -> usize {
-                let entry_id = (*regs).rdx as i32;
-                if is_auto_pickup_id(entry_id) {
-                    return 1;
-                }
-                // Pass through ALL register params and stack params from the original
-                // call. The proxy function reads r9b (4th param) and [rsp+0x48] (9th
-                // param via get_stack(9) from original RSP). Without forwarding all
-                // params, the original function gets garbage in R8/R9/stack → crashes.
-                let original_fn: extern "C" fn(
-                    u64, u64, u64, u64, u64, u64, u64, u64, u64,
-                ) -> i32 = std::mem::transmute(original);
-                original_fn(
-                    (*regs).rcx,
-                    (*regs).rdx,
-                    (*regs).r8,
-                    (*regs).r9,
-                    (*regs).get_stack(5),
-                    (*regs).get_stack(6),
-                    (*regs).get_stack(7),
-                    (*regs).get_stack(8),
-                    (*regs).get_stack(9),
-                ) as usize
-            },
-            CallbackOption::None,
-            HookFlags::empty(),
-        )
-    };
-    let handle = handle.expect("failed to install ExecuteActionButtonParamProxy hook");
-    std::mem::forget(handle);
+        .expect("ExecuteActionButtonParamProxy not found");
+    hooks::install_retn("auto_pickup: ExecuteActionButtonParamProxy", proxy_addr, auto_pickup_detour);
 }

@@ -1,10 +1,6 @@
 use std::sync::Once;
 
-use windows::Win32::System::Memory::{
-    VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,
-};
-
-use crate::{log, scan};
+use crate::{log, memory, scan};
 
 /// The map-open guard. Match starts at a `74 ??` (`je`) that, when the map is
 /// *not* allowed (i.e. in combat), falls through into the "map blocked" code.
@@ -22,32 +18,6 @@ const CLOSE_MAP_CALL_PATTERN: &str =
 /// Replacement for the close-map call site: `xor eax, eax; nop; nop`.
 const CLOSE_MAP_PATCH: [u8; 5] = [0x48, 0x31, 0xC0, 0x90, 0x90];
 
-/// Makes the page containing `addr` writable, writes `bytes`, then restores the
-/// original protection. Mirrors the code-page write pattern ilhook uses
-/// internally.
-unsafe fn write_code(addr: u64, bytes: &[u8]) -> bool {
-    let mut old_prot = PAGE_PROTECTION_FLAGS(0);
-    if unsafe {
-        VirtualProtect(
-            addr as *const core::ffi::c_void,
-            bytes.len(),
-            PAGE_EXECUTE_READWRITE,
-            &mut old_prot,
-        )
-    }
-    .is_err()
-    {
-        return false;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as *mut u8, bytes.len());
-    }
-    let _ = unsafe {
-        VirtualProtect(addr as *const core::ffi::c_void, bytes.len(), old_prot, &mut old_prot)
-    };
-    true
-}
-
 pub static MAP_IN_COMBAT_INSTALLER: Once = Once::new();
 
 /// Applies both patches from Erd-Tools' `enable_map_in_combat`: opens the map
@@ -61,11 +31,11 @@ pub fn install() {
         .expect("close-map-in-combat call signature not found");
     log::log(format!("map_in_combat: close-map call at {close_map:#x}"));
 
-    if !unsafe { write_code(guard, &[0xEB]) } {
+    if !unsafe { memory::patch_bytes(guard, &[0xEB]) } {
         log::log("map_in_combat: ERROR: failed to patch open-map guard");
         return;
     }
-    if !unsafe { write_code(close_map, &CLOSE_MAP_PATCH) } {
+    if !unsafe { memory::patch_bytes(close_map, &CLOSE_MAP_PATCH) } {
         log::log("map_in_combat: ERROR: failed to patch close-map call");
         return;
     }

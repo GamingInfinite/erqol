@@ -1,3 +1,4 @@
+use crate::config;
 use crate::ezstate_menu::{
     dump_state_group, find_dialog_state, incoming_edge, is_plain_true_state,
     redirect_transition, register_group_patcher, state_at_index, state_group_id, StateGroup,
@@ -37,6 +38,10 @@ pub(crate) fn init() {
 /// unique state whose highest-priority branch resolves to the group's OK state
 /// at array index [`OK_STATE_INDEX`].
 unsafe fn patch(state_group: *mut StateGroup) -> bool {
+    if !config::with_feature(|cfg| cfg.skip_flask_confirm) {
+        return false;
+    }
+
     let Some(id) = (unsafe { state_group_id(state_group) }) else {
         return false;
     };

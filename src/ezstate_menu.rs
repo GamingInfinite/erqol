@@ -1,19 +1,35 @@
 use std::ptr;
 use std::sync::{Mutex, Once};
 
-use ilhook::x64::{CallbackOption, HookFlags, Registers, hook_closure_retn};
+use ilhook::x64::Registers;
 
+use crate::hooks;
 use crate::log::log;
 use crate::scan;
 
 // ---- Talk command constants (mirrors elden-x talk_commands.hpp) ----
 
-const ADD_TALK_LIST_DATA: Command = Command { bank: 1, id: 19 };
-const ADD_TALK_LIST_DATA_IF: Command = Command { bank: 5, id: 19 };
-const ADD_TALK_LIST_DATA_ALT: Command = Command { bank: 5, id: 149 };
+pub(crate) const ADD_TALK_LIST_DATA: Command = Command { bank: 1, id: 19 };
+pub(crate) const ADD_TALK_LIST_DATA_IF: Command = Command { bank: 5, id: 19 };
+pub(crate) const ADD_TALK_LIST_DATA_ALT: Command = Command { bank: 5, id: 149 };
 const CLOSE_SHOP_MESSAGE: Command = Command { bank: 1, id: 12 };
-const CLEAR_TALK_LIST_DATA: Command = Command { bank: 1, id: 20 };
+pub(crate) const CLEAR_TALK_LIST_DATA: Command = Command { bank: 1, id: 20 };
 const SHOW_SHOP_MESSAGE: Command = Command { bank: 1, id: 10 };
+/// `OpenRegularShop(range_start, range_end)` — the merchant's buy shop.
+pub(crate) const OPEN_REGULAR_SHOP: Command = Command { bank: 1, id: 22 };
+/// `OpenSellShop(-1, -1)` — the sell-shop sub-menu.
+pub(crate) const OPEN_SELL_SHOP: Command = Command { bank: 1, id: 46 };
+/// `OpenEnhanceShop(0)` — weapon/armament reinforcement.
+pub(crate) const OPEN_ENHANCE_SHOP: Command = Command { bank: 1, id: 24 };
+/// `CombineMenuFlagAndEventFlag(menuFlagId, eventFlagId)` — sets up internal
+/// state before certain shop menus (e.g. the enhancement shop).
+pub(crate) const COMBINE_MENU_FLAG_AND_EVENT_FLAG: Command = Command { bank: 1, id: 49 };
+/// `OpenEquipmentChangeOfPurposeShop()` — Ash of War duplication.
+pub(crate) const OPEN_EQUIPMENT_CHANGE_OF_PURPOSE_SHOP: Command = Command { bank: 1, id: 48 };
+/// `OpenBuddyUpgradeMenu()` — spirit tuning.
+pub(crate) const OPEN_BUDDY_UPGRADE_MENU: Command = Command { bank: 1, id: 136 };
+/// `AwardItemLot(lot)` — grants the item lot. Used for bell bearings.
+pub(crate) const AWARD_ITEM_LOT: Command = Command { bank: 1, id: 104 };
 /// `6:2147483647(...)` — the generic `OpenGenericDialog` sub-call.
 #[allow(dead_code)]
 const OPEN_GENERIC_DIALOG: Command = Command {
@@ -36,20 +52,19 @@ const LOOKUP_ENTRY_PATTERN: &str = "8b da 44 8b ca 33 d2 48 8b f9 44 8d 42 6f e8
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Span<T> {
-    ptr: *mut T,
-    len: usize,
+pub(crate) struct Span<T> {
+    pub(crate) ptr: *mut T,
+    pub(crate) len: usize,
 }
 
 impl<T> Span<T> {
-    fn null() -> Self {
+    pub(crate) fn null() -> Self {
         Self {
             ptr: ptr::null_mut(),
             len: 0,
         }
     }
 }
-
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Command {
@@ -59,35 +74,35 @@ pub(crate) struct Command {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Event {
-    command: Command,
-    args: Span<Span<u8>>,
+pub(crate) struct Event {
+    pub(crate) command: Command,
+    pub(crate) args: Span<Span<u8>>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct Transition {
     pub(crate) target_state: *mut State,
-    pass_events: Span<Event>,
-    sub_transitions: Span<*mut Transition>,
-    evaluator: Span<u8>,
+    pub(crate) pass_events: Span<Event>,
+    pub(crate) sub_transitions: Span<*mut Transition>,
+    pub(crate) evaluator: Span<u8>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct State {
-    id: i32,
-    transitions: Span<*mut Transition>,
-    entry_events: Span<Event>,
-    exit_events: Span<Event>,
-    while_events: Span<Event>,
+    pub(crate) id: i32,
+    pub(crate) transitions: Span<*mut Transition>,
+    pub(crate) entry_events: Span<Event>,
+    pub(crate) exit_events: Span<Event>,
+    pub(crate) while_events: Span<Event>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct StateGroup {
-    id: i32,
-    states: Span<State>,
+    pub(crate) id: i32,
+    pub(crate) states: Span<State>,
     pub(crate) initial_state: *mut State,
 }
 
@@ -99,7 +114,7 @@ struct Machine {
     unk2: [u8; 0x110],
 }
 
-unsafe fn slice_of<T>(span: Span<T>) -> &'static [T] {
+pub(crate) unsafe fn slice_of<T>(span: Span<T>) -> &'static [T] {
     if span.len == 0 || span.ptr.is_null() {
         &[]
     } else {
@@ -109,7 +124,7 @@ unsafe fn slice_of<T>(span: Span<T>) -> &'static [T] {
 
 // ---- ESD expression helpers ----
 
-fn make_int_expression(value: i32) -> [u8; 6] {
+pub(crate) fn make_int_expression(value: i32) -> [u8; 6] {
     [
         0x82,
         value as u8,
@@ -121,7 +136,7 @@ fn make_int_expression(value: i32) -> [u8; 6] {
 }
 
 /// `GetTalkListEntryResult() == value`
-fn make_talk_list_result_expression(value: i32) -> [u8; 9] {
+pub(crate) fn make_talk_list_result_expression(value: i32) -> [u8; 9] {
     [
         0x57,
         0x84,
@@ -143,8 +158,38 @@ const TALK_MENU_CLOSED_EXPR: [u8; 15] = [
     0x98, 0x40, 0x95, 0xa1, // && (both) == 0
 ];
 
+/// Same as [`TALK_MENU_CLOSED_EXPR`] but for menu type 5 (the regular shop
+/// menu): `(CheckSpecificPersonMenuIsOpen(5, 0) == 1 && CheckSpecificPersonGenericDialogIsOpen(0) == 0) == 0`.
+pub(crate) const SHOP_MENU_CLOSED_EXPR: [u8; 15] = [
+    0x7b, 0x45, 0x40, 0x86, 0x41, 0x95, // shop menu open (5, 0) == 1
+    0x7a, 0x40, 0x85, 0x40, 0x95, // generic dialog open (0) == 0
+    0x98, 0x40, 0x95, 0xa1, // && (both) == 0
+];
+
+/// Builds a menu-closed expression for an arbitrary menu type.
+/// `(CheckSpecificPersonMenuIsOpen(menu_type, 0) == 1 && CheckSpecificPersonGenericDialogIsOpen(0) == 0) == 0`
+pub(crate) fn make_menu_closed_expr(menu_type: i32) -> [u8; 15] {
+    [
+        0x7b,
+        (menu_type + 64) as u8,
+        0x40,
+        0x86,
+        0x41,
+        0x95,
+        0x7a,
+        0x40,
+        0x85,
+        0x40,
+        0x95,
+        0x98,
+        0x40,
+        0x95,
+        0xa1,
+    ]
+}
+
 /// Parses an ESD expression containing only a 1 or 4 byte integer.
-unsafe fn get_ezstate_int_value(expr: Span<u8>) -> i32 {
+pub(crate) unsafe fn get_ezstate_int_value(expr: Span<u8>) -> i32 {
     if expr.len == 2 && !expr.ptr.is_null() {
         return unsafe { *expr.ptr } as i32 - 64;
     }
@@ -154,7 +199,7 @@ unsafe fn get_ezstate_int_value(expr: Span<u8>) -> i32 {
     -1
 }
 
-unsafe fn event_arg_int(event: &Event, index: usize) -> i32 {
+pub(crate) unsafe fn event_arg_int(event: &Event, index: usize) -> i32 {
     if event.args.len <= index || event.args.ptr.is_null() {
         return -1;
     }
@@ -188,7 +233,7 @@ unsafe fn is_grace_state_group(state_group: *mut StateGroup) -> bool {
 
 /// True if the transition's evaluator is `SetREG0(GetTalkListEntryResult()) == N`,
 /// the signature of the row-dispatch transition of a talk menu state.
-unsafe fn is_talk_list_result_transition(transition: *mut Transition) -> bool {
+pub(crate) unsafe fn is_talk_list_result_transition(transition: *mut Transition) -> bool {
     if transition.is_null() {
         return false;
     }
@@ -343,7 +388,7 @@ pub(crate) struct SubMenu {
     show_msg_args: Box<[Span<u8>]>,
     menu_open_transition: Transition,
     menu_open_transition_arr: [*mut Transition; 1],
-    state: State,
+    pub(crate) state: State,
     branch_state: State,
     branch_transitions: Box<[*mut Transition]>,
 }
@@ -396,20 +441,32 @@ impl SubMenu {
     /// stable address, then returns a pointer to the submenu state. Rows
     /// without an action return to `return_state`; rows with an action get a
     /// dedicated action state and return to `return_state` after the callback.
-    pub(crate) unsafe fn link(ptr: *mut SubMenu, return_state: *mut State) -> *mut State {
+    /// `return_state` is where rows without an action go (e.g. Cancel).
+    /// `action_return_state` is where action rows return to; pass the submenu
+    /// state itself to keep the player inside the submenu after a toggle.
+    pub(crate) unsafe fn link(
+        ptr: *mut SubMenu,
+        return_state: *mut State,
+        action_return_state: *mut State,
+    ) -> *mut State {
         let this = unsafe { &mut *ptr };
 
         for opt in &mut this.options {
             opt.link();
+            let target_return_state = if opt.action.is_some() && !action_return_state.is_null() {
+                action_return_state
+            } else {
+                return_state
+            };
             opt.transition.target_state = match opt.action {
                 Some(action) => {
-                    let target = Box::into_raw(Box::new(ActionTarget::new(return_state)));
+                    let target = Box::into_raw(Box::new(ActionTarget::new(target_return_state)));
                     unsafe { (*target).link() };
                     let action_state = unsafe { &mut (*target).state } as *mut State;
                     register_action(action_state, action);
                     action_state
                 }
-                None => return_state,
+                None => target_return_state,
             };
         }
 
@@ -479,6 +536,43 @@ impl SubMenu {
         this.branch_state.while_events = Span::null();
 
         &mut this.state as *mut State
+    }
+
+    /// Builds, leaks, and links a [`SubMenu`] from a row description in one step.
+    /// This is the common pattern used by grace menu patchers.
+    #[allow(dead_code)]
+    pub(crate) unsafe fn link_from_rows(
+        rows: &[(i32, i32, bool, Option<SubMenuAction>)],
+        return_state: *mut State,
+        action_return_state: *mut State,
+    ) -> *mut State {
+        let submenu = Box::into_raw(Box::new(SubMenu::new(rows)));
+        unsafe { SubMenu::link(submenu, return_state, action_return_state) }
+    }
+
+    /// Same as [`link_from_rows`], but action rows return to the submenu itself
+    /// rather than to a separate state. Used by self-contained toggles.
+    pub(crate) unsafe fn link_from_rows_self_return(
+        rows: &[(i32, i32, bool, Option<SubMenuAction>)],
+        return_state: *mut State,
+    ) -> *mut State {
+        let submenu = Box::into_raw(Box::new(SubMenu::new(rows)));
+        let self_state = unsafe { std::ptr::addr_of_mut!((*submenu).state) };
+        unsafe { SubMenu::link(submenu, return_state, self_state) }
+    }
+
+    /// Overrides the transition target of a row that was set during `link`.
+    /// Used to wire nested submenus: after linking, point a no-action row at
+    /// another submenu state instead of `return_state`.
+    pub(crate) unsafe fn set_option_target(
+        ptr: *mut SubMenu,
+        index: usize,
+        target_state: *mut State,
+    ) {
+        let this = unsafe { &mut *ptr };
+        if let Some(opt) = this.options.get_mut(index) {
+            opt.transition.target_state = target_state;
+        }
     }
 }
 
@@ -665,10 +759,6 @@ pub(crate) unsafe fn splice_option(
             if unsafe { is_sort_chest_event(event) } {
                 add_menu_state = Some(state_ptr);
                 event_index = i as i32;
-            } else if event.command == ADD_TALK_LIST_DATA
-                && unsafe { event_arg_int(event, 1) } == message_id
-            {
-                return false;
             }
         }
 
@@ -938,7 +1028,15 @@ type Patcher = unsafe fn(*mut StateGroup) -> bool;
 
 static PATCHERS: Mutex<Vec<Patcher>> = Mutex::new(Vec::new());
 static GROUP_PATCHERS: Mutex<Vec<Patcher>> = Mutex::new(Vec::new());
-static MESSAGES: Mutex<Vec<(i32, &'static [u16])>> = Mutex::new(Vec::new());
+static MESSAGES: Mutex<Vec<RegisteredMessage>> = Mutex::new(Vec::new());
+
+const MESSAGE_CAPACITY: usize = 128;
+
+struct RegisteredMessage {
+    bnd: u32,
+    id: i32,
+    text: &'static mut [u16],
+}
 
 /// A callback invoked on the game's main thread when the player selects a
 /// submenu option wired to an action.
@@ -975,15 +1073,67 @@ pub(crate) fn register_group_patcher(patcher: Patcher) {
 }
 
 /// Registers a message text that `MsgRepositoryImp::LookupEntry` returns for
-/// `message_id` (talk message bound 33).
-pub(crate) fn register_message(message_id: i32, text: &'static [u16]) {
+/// `message_id` in message bound `bnd`. The text is UTF-16 encoded and
+/// NUL-terminated here, since the game reads it as a C-style wide string.
+pub(crate) fn register_message_in_bnd(bnd: u32, message_id: i32, text: &str) {
+    let text = encode_message_text(text);
     MESSAGES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push((message_id, text));
+        .push(RegisteredMessage {
+            bnd,
+            id: message_id,
+            text,
+        });
+}
+
+/// Updates a previously registered message text in the menu text bound
+/// (bound 33). Reuses the existing buffer if the new text fits, otherwise
+/// leaks a new one.
+pub(crate) fn update_message(message_id: i32, text: &str) {
+    update_message_in_bnd(MSGBND_EVENT_TEXT_FOR_TALK, message_id, text);
+}
+
+/// Updates a previously registered message text in the given bound.
+pub(crate) fn update_message_in_bnd(bnd: u32, message_id: i32, text: &str) {
+    let mut chars: Vec<u16> = text.encode_utf16().collect();
+    chars.push(0);
+    let mut messages = MESSAGES.lock().unwrap_or_else(|e| e.into_inner());
+    for entry in messages.iter_mut() {
+        if entry.bnd == bnd && entry.id == message_id {
+            if chars.len() <= entry.text.len() {
+                entry.text[..chars.len()].copy_from_slice(&chars);
+                // NUL-terminate at the new length in case the old text was longer.
+                entry.text[chars.len() - 1] = 0;
+            } else {
+                entry.text = Box::leak(chars.into_boxed_slice());
+            }
+            return;
+        }
+    }
+}
+
+fn encode_message_text(text: &str) -> &'static mut [u16] {
+    let mut chars: Vec<u16> = text.encode_utf16().collect();
+    chars.push(0);
+    if chars.len() < MESSAGE_CAPACITY {
+        chars.resize(MESSAGE_CAPACITY, 0);
+    }
+    Box::leak(chars.into_boxed_slice())
+}
+
+/// Registers a message text that `MsgRepositoryImp::LookupEntry` returns for
+/// `message_id` (talk message bound 33).
+pub(crate) fn register_message(message_id: i32, text: &str) {
+    register_message_in_bnd(MSGBND_EVENT_TEXT_FOR_TALK, message_id, text);
 }
 
 // ---- Hooks ----
+
+/// Diagnostic logger: logs every talk-script state entry (group id in the
+/// 2147483xxx talk range) so merchant conversations can be correlated against
+/// runtime machine/group pointers. Set to `false` to disable.
+const DIAG_LOG_STATE_ENTRIES: bool = false;
 
 fn ezstate_enter_state_detour(regs: *mut Registers, original: usize) -> usize {
     let state = unsafe { (*regs).rcx } as *mut State;
@@ -992,20 +1142,57 @@ fn ezstate_enter_state_detour(regs: *mut Registers, original: usize) -> usize {
     if !machine.is_null() {
         unsafe {
             let state_group = (*machine).state_group;
-            if !state_group.is_null() && state == (*state_group).initial_state {
-                if is_grace_state_group(state_group) {
-                    let patchers = PATCHERS.lock().unwrap_or_else(|e| e.into_inner());
-                    for patcher in patchers.iter() {
-                        if patcher(state_group) {
-                            log("ezstate_menu: patched site of grace menu");
+            if !state_group.is_null() {
+                if DIAG_LOG_STATE_ENTRIES && (*state_group).id > 2147480000 {
+                    let state_id = if state.is_null() { -1 } else { (*state).id };
+                    let initial_state_id = if (*state_group).initial_state.is_null() {
+                        -1
+                    } else {
+                        (*(*state_group).initial_state).id
+                    };
+                    log(&format!(
+                        "ezstate_diag: group_id={} state_id={} init={}",
+                        (*state_group).id, state_id, initial_state_id,
+                    ));
+                    // Log all entry events so we can see OpenRegularShop
+                    // ranges, AddTalkListData message IDs, etc.
+                    if !state.is_null() {
+                        let events = slice_of((*state).entry_events);
+                        for (i, event) in events.iter().enumerate() {
+                            let mut args_str = String::new();
+                            for ai in 0..4 {
+                                let v = event_arg_int(event, ai);
+                                if v == -1 {
+                                    break;
+                                }
+                                if ai > 0 {
+                                    args_str.push(',');
+                                }
+                                args_str.push_str(&v.to_string());
+                            }
+                            log(&format!(
+                                "  [{}] {}:{}({})",
+                                i, event.command.bank, event.command.id, args_str,
+                            ));
                         }
                     }
                 }
 
-                let group_patchers = GROUP_PATCHERS.lock().unwrap_or_else(|e| e.into_inner());
-                for patcher in group_patchers.iter() {
-                    if patcher(state_group) {
-                        log("ezstate_menu: patched state group transitions");
+                if state == (*state_group).initial_state {
+                    if is_grace_state_group(state_group) {
+                        let patchers = PATCHERS.lock().unwrap_or_else(|e| e.into_inner());
+                        for patcher in patchers.iter() {
+                            if patcher(state_group) {
+                                log("ezstate_menu: patched site of grace menu");
+                            }
+                        }
+                    }
+
+                    let group_patchers = GROUP_PATCHERS.lock().unwrap_or_else(|e| e.into_inner());
+                    for patcher in group_patchers.iter() {
+                        if patcher(state_group) {
+                            log("ezstate_menu: patched state group transitions");
+                        }
                     }
                 }
             }
@@ -1033,13 +1220,24 @@ fn lookup_entry_detour(regs: *mut Registers, original: usize) -> usize {
     let bnd = unsafe { (*regs).r8 } as u32;
     let msg_id = unsafe { (*regs).r9 } as i32;
 
-    if bnd == MSGBND_EVENT_TEXT_FOR_TALK {
-        let messages = MESSAGES.lock().unwrap_or_else(|e| e.into_inner());
-        for &(id, text) in messages.iter() {
-            if id == msg_id {
-                return text.as_ptr() as usize;
+    let messages = MESSAGES.lock().unwrap_or_else(|e| e.into_inner());
+    for msg in messages.iter() {
+        if msg.bnd == bnd && msg.id == msg_id {
+            if bnd == MSGBND_EVENT_TEXT_FOR_TALK && (69_990_000..=69_990_100).contains(&msg_id) {
+                log(&format!(
+                    "ezstate_menu: LookupEntry served bnd={bnd} msg_id={msg_id} text_len={}",
+                    msg.text.len()
+                ));
             }
+            return msg.text.as_ptr() as usize;
         }
+    }
+    drop(messages);
+
+    if bnd == MSGBND_EVENT_TEXT_FOR_TALK && (69_990_000..=69_990_100).contains(&msg_id) {
+        log(&format!(
+            "ezstate_menu: LookupEntry fell through bnd={bnd} msg_id={msg_id}"
+        ));
     }
 
     let original_fn: extern "C" fn(*mut core::ffi::c_void, u32, u32, i32) -> *const u16 =
@@ -1071,23 +1269,7 @@ fn install_enter_state_hook() {
     log(&format!(
         "ezstate_menu: EzState::EnterState at {enter_state:#x}"
     ));
-
-    match unsafe {
-        hook_closure_retn(
-            enter_state as usize,
-            ezstate_enter_state_detour,
-            CallbackOption::None,
-            HookFlags::empty(),
-        )
-    } {
-        Ok(handle) => {
-            std::mem::forget(handle);
-            log("ezstate_menu: hooked EzState::EnterState");
-        }
-        Err(err) => log(&format!(
-            "ezstate_menu: ERROR: failed to hook EnterState: {err:?}"
-        )),
-    }
+    hooks::install_retn("ezstate_menu: EzState::EnterState", enter_state, ezstate_enter_state_detour);
 }
 
 fn install_lookup_entry_hook() {
@@ -1098,21 +1280,5 @@ fn install_lookup_entry_hook() {
     log(&format!(
         "ezstate_menu: MsgRepositoryImp::LookupEntry at {lookup_entry:#x}"
     ));
-
-    match unsafe {
-        hook_closure_retn(
-            lookup_entry as usize,
-            lookup_entry_detour,
-            CallbackOption::None,
-            HookFlags::empty(),
-        )
-    } {
-        Ok(handle) => {
-            std::mem::forget(handle);
-            log("ezstate_menu: hooked MsgRepositoryImp::LookupEntry");
-        }
-        Err(err) => log(&format!(
-            "ezstate_menu: ERROR: failed to hook LookupEntry: {err:?}"
-        )),
-    }
+    hooks::install_retn("ezstate_menu: MsgRepositoryImp::LookupEntry", lookup_entry, lookup_entry_detour);
 }

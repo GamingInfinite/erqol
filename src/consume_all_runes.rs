@@ -1,8 +1,7 @@
-use std::sync::OnceLock;
-
 use eldenring::cs::{EquipParamGoods, GameDataMan, SoloParamRepository};
 use fromsoftware_shared::FromStatic;
 
+use crate::config;
 use crate::ezstate_menu::{
     register_message, register_patcher, splice_option, StateGroup, SubMenu, SubMenuAction,
 };
@@ -10,27 +9,11 @@ use crate::log::log;
 
 // ---- Message constants ----
 
-const MSG_CONSUME_ALL_RUNES: i32 = 69000000;
-const MSG_CONSUME_GOLDEN_RUNES: i32 = 69000001;
-const MSG_CONSUME_REMEMBRANCES: i32 = 69000002;
-const MSG_CANCEL: i32 = 69000003;
+const MSG_CONSUME_ALL_RUNES: i32 = 69_990_000;
+const MSG_CONSUME_GOLDEN_RUNES: i32 = 69_990_001;
+const MSG_CONSUME_REMEMBRANCES: i32 = 69_990_002;
+const MSG_CANCEL: i32 = 69_990_003;
 const OPTION_INDEX: i32 = 69;
-
-static CONSUME_ALL_RUNES_TEXT: OnceLock<Vec<u16>> = OnceLock::new();
-static GOLDEN_RUNES_TEXT: OnceLock<Vec<u16>> = OnceLock::new();
-static REMEMBRANCES_TEXT: OnceLock<Vec<u16>> = OnceLock::new();
-static CANCEL_TEXT: OnceLock<Vec<u16>> = OnceLock::new();
-
-/// Returns a leaked, NUL-terminated UTF-16 copy of `text`.
-fn static_utf16(buffer: &'static OnceLock<Vec<u16>>, text: &str) -> &'static [u16] {
-    buffer
-        .get_or_init(|| {
-            let mut chars: Vec<u16> = text.encode_utf16().collect();
-            chars.push(0);
-            chars
-        })
-        .as_slice()
-}
 
 // ---- Rune sources ----
 
@@ -152,39 +135,41 @@ unsafe extern "C" fn consume_remembrances_action() {
 /// before `ezstate_menu::install()`.
 pub(crate) fn init() {
     register_patcher(patch);
-    register_message(
-        MSG_CONSUME_ALL_RUNES,
-        static_utf16(&CONSUME_ALL_RUNES_TEXT, "Consume all Runes"),
-    );
-    register_message(
-        MSG_CONSUME_GOLDEN_RUNES,
-        static_utf16(&GOLDEN_RUNES_TEXT, "Consume Golden Runes"),
-    );
-    register_message(
-        MSG_CONSUME_REMEMBRANCES,
-        static_utf16(&REMEMBRANCES_TEXT, "Consume Remembrances"),
-    );
-    register_message(MSG_CANCEL, static_utf16(&CANCEL_TEXT, "Cancel"));
+    register_message(MSG_CONSUME_ALL_RUNES, "Consume all Runes");
+    register_message(MSG_CONSUME_GOLDEN_RUNES, "Consume Golden Runes");
+    register_message(MSG_CONSUME_REMEMBRANCES, "Consume Remembrances");
+    register_message(MSG_CANCEL, "Cancel");
 }
 
 /// Adds the "Consume all Runes" option to a grace menu state group along with
 /// the submenu it opens. Safe to call on every grace menu open; the library's
 /// already-patched check makes it a no-op afterwards.
 pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
+    if !config::with_feature(|cfg| cfg.consume_all_runes) {
+        return false;
+    }
+
     unsafe {
         let initial_state = (*state_group).initial_state;
 
-        let submenu = Box::into_raw(Box::new(SubMenu::new(&[
-            (
-                1,
-                MSG_CONSUME_GOLDEN_RUNES,
-                false,
-                Some(consume_golden_runes_action as SubMenuAction),
-            ),
-            (2, MSG_CONSUME_REMEMBRANCES, false, Some(consume_remembrances_action as SubMenuAction)),
-            (99, MSG_CANCEL, true, None),
-        ])));
-        let submenu_state = SubMenu::link(submenu, initial_state);
+        let submenu_state = SubMenu::link_from_rows_self_return(
+            &[
+                (
+                    1,
+                    MSG_CONSUME_GOLDEN_RUNES,
+                    false,
+                    Some(consume_golden_runes_action as SubMenuAction),
+                ),
+                (
+                    2,
+                    MSG_CONSUME_REMEMBRANCES,
+                    false,
+                    Some(consume_remembrances_action as SubMenuAction),
+                ),
+                (99, MSG_CANCEL, true, None),
+            ],
+            initial_state,
+        );
 
         splice_option(
             state_group,

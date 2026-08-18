@@ -7,6 +7,11 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+/// Returns the parent directory of the loaded `erqol.dll`, if known.
+pub fn dll_parent() -> Option<PathBuf> {
+    DLL_PATH.get().and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 
@@ -29,18 +34,21 @@ fn log_file() -> &'static Mutex<Option<File>> {
             .get()
             .and_then(|p| p.parent())
             .map(|dir| dir.join("logs").join("erqol.log"));
-        let file = path.and_then(|p| open_log(&p));
+        let file = path.and_then(|p| open_log(&p, true));
         Mutex::new(file)
     })
 }
 
-fn open_log(path: &Path) -> Option<File> {
+fn open_log(path: &Path, truncate: bool) -> Option<File> {
     std::fs::create_dir_all(path.parent()?).ok()?;
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()
+    let mut opts = OpenOptions::new();
+    opts.create(true).write(true);
+    if truncate {
+        opts.truncate(true);
+    } else {
+        opts.append(true);
+    }
+    opts.open(path).ok()
 }
 
 /// Appends a line to `logs/erqol.log`. Failures are silently ignored so logging
@@ -61,7 +69,7 @@ pub(crate) fn crash_log(msg: impl AsRef<str>) {
         .and_then(|p| p.parent())
         .map(|dir| dir.join("logs").join("crash.log"));
     if let Some(path) = path
-        && let Some(mut file) = open_log(&path)
+        && let Some(mut file) = open_log(&path, false)
     {
         let _ = writeln!(file, "{}", msg.as_ref());
     }
