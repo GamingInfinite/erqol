@@ -12,3 +12,6 @@
   `/mnt/BARGE/Git/ERQoL/target/x86_64-pc-windows-gnu/debug/erqol.dll`
 - After making a new debug build, copy the DLL to:
   `/mnt/BARGE/FromSoftModding/ERQoL/`
+- When testing with **Elden Ring Reforged**, copy the DLL to Reforged's own
+  third-party DLL folder instead:
+  `/mnt/BARGE/FromSoftModding/ERRv2.2.9.6/dll/offline/`
