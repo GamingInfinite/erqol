@@ -21,6 +21,7 @@ mod log;
 mod map_in_combat;
 mod memory;
 mod merchant_bell_bearing;
+mod no_time_on_death;
 mod roundtable_at_home;
 mod scan;
 mod skip_flask_confirm;
@@ -173,6 +174,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 auto_pickup::AUTO_PICKUP_INSTALLER.call_once(auto_pickup::install_auto_pickup_hook);
                 map_in_combat::MAP_IN_COMBAT_INSTALLER.call_once(map_in_combat::install);
                 heavy_door::HEAVY_DOOR_INSTALLER.call_once(heavy_door::install);
+                no_time_on_death::NO_TIME_ON_DEATH_INSTALLER.call_once(no_time_on_death::install);
                 dungeon_warp::patch();
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
                     anti_farm_shop::init();

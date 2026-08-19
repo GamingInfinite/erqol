@@ -14,6 +14,7 @@ pub struct Config {
     pub consume_all_runes: bool,
     pub merchant_bell_bearing: bool,
     pub roundtable_at_home: bool,
+    pub no_time_on_death: bool,
 }
 
 impl Default for Config {
@@ -27,6 +28,7 @@ impl Default for Config {
             consume_all_runes: true,
             merchant_bell_bearing: true,
             roundtable_at_home: true,
+            no_time_on_death: true,
         }
     }
 }
@@ -86,12 +88,13 @@ pub fn load() {
             "consume_all_runes" => cfg.consume_all_runes = parse_bool(value),
             "merchant_bell_bearing" => cfg.merchant_bell_bearing = parse_bool(value),
             "roundtable_at_home" => cfg.roundtable_at_home = parse_bool(value),
+            "no_time_on_death" => cfg.no_time_on_death = parse_bool(value),
             _ => {}
         }
     }
 
     log(format!(
-        "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={}",
+        "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} ntod={}",
         path.display(),
         cfg.dungeon_warp,
         cfg.map_in_combat,
@@ -101,6 +104,7 @@ pub fn load() {
         cfg.consume_all_runes,
         cfg.merchant_bell_bearing,
         cfg.roundtable_at_home,
+        cfg.no_time_on_death,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -116,7 +120,8 @@ pub fn save() {
          # Edit values and restart the game for changes to take effect.\n\
          # Runtime-toggleable features (no restart needed):\n\
          #   auto_pickup, skip_flask_confirm, anti_farm_shop,\n\
-         #   consume_all_runes, merchant_bell_bearing, roundtable_at_home\n\
+         #   consume_all_runes, merchant_bell_bearing, roundtable_at_home,\n\
+         #   no_time_on_death\n\
          \n\
          dungeon_warp = {dungeon_warp}\n\
          map_in_combat = {map_in_combat}\n\
@@ -125,7 +130,8 @@ pub fn save() {
          anti_farm_shop = {anti_farm_shop}\n\
          consume_all_runes = {consume_all_runes}\n\
          merchant_bell_bearing = {merchant_bell_bearing}\n\
-         roundtable_at_home = {roundtable_at_home}\n",
+         roundtable_at_home = {roundtable_at_home}\n\
+         no_time_on_death = {no_time_on_death}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -134,6 +140,7 @@ pub fn save() {
         consume_all_runes = cfg.consume_all_runes,
         merchant_bell_bearing = cfg.merchant_bell_bearing,
         roundtable_at_home = cfg.roundtable_at_home,
+        no_time_on_death = cfg.no_time_on_death,
     );
     drop(cfg);
 
@@ -156,4 +163,5 @@ pub static DUNGEON_WARP_ENABLED: AtomicBool = AtomicBool::new(true);
 pub fn apply_to_runtime() {
     let cfg = config().lock().unwrap_or_else(|e| e.into_inner());
     DUNGEON_WARP_ENABLED.store(cfg.dungeon_warp, Ordering::Relaxed);
+    crate::no_time_on_death::set_enabled(cfg.no_time_on_death);
 }

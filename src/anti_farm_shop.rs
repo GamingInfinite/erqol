@@ -3,7 +3,7 @@
 //! for runes, so the player can skip farming for them.
 //!
 //! Like Glorious Merchant, the shop rows live entirely in this mod's memory:
-//! `SoloParamRepositoryImp::LookupShopMenu` and `LookupShopLineup` are hooked
+//! `SoloParamRepositoryImp::LookupShopLineupParamParamInRange` and `LookupShopLineupParam` are hooked
 //! to serve mod-owned lineup rows for a reserved id range (9500000+), which
 //! vanilla, Convergence, Glorious Merchant and the transmog mod all leave
 //! untouched.
@@ -39,6 +39,8 @@ const MSGBND_MENU_TEXT: u32 = 200;
 
 const GOLD_FIREFLY: (i32, i32) = (20811, 500);
 const FOUR_TOED_FOWL_FOOT: (i32, i32) = (15080, 1000);
+const FLIGHT_PINION: (i32, i32) = (15060, 1000);
+const AEONIAN_BUTTERFLY: (i32, i32) = (20801, 500);
 
 /// Equips goods like Kalé's wares.
 const EQUIP_TYPE_GOODS: u8 = 3;
@@ -49,7 +51,7 @@ const EQUIP_TYPE_GOODS: u8 = 3;
 const LOOKUP_SHOP_MENU_PATTERN: &str = "? 8b 4e 14 ? 8b 46 10 33 d2 48 8d 4d ? e8 $ '";
 const LOOKUP_SHOP_LINEUP_PATTERN: &str =
     "48 8d 15 ? ? ? ? 45 33 c0 ? ? ? e8 ? ? ? ? 48 85 c0 74 ?";
-/// Distance from the LookupShopLineup pattern match to the function start.
+/// Distance from the LookupShopLineupParam pattern match to the function start.
 const LOOKUP_SHOP_LINEUP_OFFSET: usize = 129;
 
 /// `SoloParamRepositoryImp::FindShopMenuResult` / `FindShopLineupResult`:
@@ -61,13 +63,15 @@ struct ShopResult {
     row: *const SHOP_LINEUP_PARAM,
 }
 
-static LINEUPS: OnceLock<&'static [SHOP_LINEUP_PARAM; 2]> = OnceLock::new();
+static LINEUPS: OnceLock<&'static [SHOP_LINEUP_PARAM; 4]> = OnceLock::new();
 
-fn lineups() -> &'static [SHOP_LINEUP_PARAM; 2] {
+fn lineups() -> &'static [SHOP_LINEUP_PARAM; 4] {
     LINEUPS.get_or_init(|| {
         let rows = [
             make_lineup(GOLD_FIREFLY.0, GOLD_FIREFLY.1),
             make_lineup(FOUR_TOED_FOWL_FOOT.0, FOUR_TOED_FOWL_FOOT.1),
+            make_lineup(FLIGHT_PINION.0, FLIGHT_PINION.1),
+            make_lineup(AEONIAN_BUTTERFLY.0, AEONIAN_BUTTERFLY.1),
         ];
         Box::leak(Box::new(rows))
     })
@@ -91,7 +95,7 @@ fn make_lineup(equip_id: i32, price: i32) -> SHOP_LINEUP_PARAM {
 
 // ---- Shop lookup hooks ----
 
-/// Hook for `SoloParamRepositoryImp::LookupShopMenu(result, shop_type, begin_id, end_id)`.
+/// Hook for `SoloParamRepositoryImp::LookupShopLineupParamParamInRange(result, shop_type, begin_id, end_id)`.
 /// Returns our shop menu row when the requested range starts at our shop id.
 fn lookup_shop_menu_detour(regs: *mut Registers, original: usize) -> usize {
     let result = unsafe { (*regs).rcx } as *mut ShopResult;
@@ -101,7 +105,7 @@ fn lookup_shop_menu_detour(regs: *mut Registers, original: usize) -> usize {
 
     if begin_id == SHOP_ID {
         log(&format!(
-            "anti_farm_shop: LookupShopMenu called shop_type={shop_type} begin_id={begin_id} end_id={end_id}"
+            "anti_farm_shop: LookupShopLineupParamParamInRange called shop_type={shop_type} begin_id={begin_id} end_id={end_id}"
         ));
         unsafe {
             (*result).shop_type = shop_type;
@@ -109,7 +113,7 @@ fn lookup_shop_menu_detour(regs: *mut Registers, original: usize) -> usize {
             (*result).row = lineups().as_ptr();
         }
         log(&format!(
-            "anti_farm_shop: LookupShopMenu served shop menu for begin_id={begin_id}"
+            "anti_farm_shop: LookupShopLineupParamParamInRange served shop menu for begin_id={begin_id}"
         ));
         return result as usize;
     }
@@ -119,7 +123,7 @@ fn lookup_shop_menu_detour(regs: *mut Registers, original: usize) -> usize {
     original_fn(result, shop_type, begin_id, end_id) as usize
 }
 
-/// Hook for `SoloParamRepositoryImp::LookupShopLineup(result, shop_type, id)`.
+/// Hook for `SoloParamRepositoryImp::LookupShopLineupParam(result, shop_type, id)`.
 /// Returns our lineup rows for ids in `[SHOP_ID, SHOP_ID + lineups.len())`;
 /// anything else falls through to the vanilla lookup.
 fn lookup_shop_lineup_detour(regs: *mut Registers, original: usize) -> usize {
@@ -130,7 +134,7 @@ fn lookup_shop_lineup_detour(regs: *mut Registers, original: usize) -> usize {
     let in_range = id >= SHOP_ID && id < SHOP_ID + 10;
     if in_range {
         log(&format!(
-            "anti_farm_shop: LookupShopLineup called shop_type={shop_type} id={id}"
+            "anti_farm_shop: LookupShopLineupParam called shop_type={shop_type} id={id}"
         ));
     }
 
@@ -141,7 +145,7 @@ fn lookup_shop_lineup_detour(regs: *mut Registers, original: usize) -> usize {
             (*result).id = id;
             (*result).row = lineups.as_ptr().add((id - SHOP_ID) as usize);
         }
-        log(&format!("anti_farm_shop: LookupShopLineup served lineup id={id}"));
+        log(&format!("anti_farm_shop: LookupShopLineupParam served lineup id={id}"));
         return result as usize;
     }
 
@@ -152,21 +156,21 @@ fn lookup_shop_lineup_detour(regs: *mut Registers, original: usize) -> usize {
 
 fn install_lookup_shop_menu_hook() {
     let Some(target) = scan::scan_pattern_call(LOOKUP_SHOP_MENU_PATTERN) else {
-        log("anti_farm_shop: ERROR: LookupShopMenu signature not found");
+        log("anti_farm_shop: ERROR: LookupShopLineupParamParamInRange signature not found");
         return;
     };
-    log(&format!("anti_farm_shop: LookupShopMenu at {target:#x}"));
-    hooks::install_retn("anti_farm_shop: LookupShopMenu", target, lookup_shop_menu_detour);
+    log(&format!("anti_farm_shop: LookupShopLineupParamParamInRange at {target:#x}"));
+    hooks::install_retn("anti_farm_shop: LookupShopLineupParamParamInRange", target, lookup_shop_menu_detour);
 }
 
 fn install_lookup_shop_lineup_hook() {
     let Some(match_addr) = scan::scan_pattern(LOOKUP_SHOP_LINEUP_PATTERN) else {
-        log("anti_farm_shop: ERROR: LookupShopLineup signature not found");
+        log("anti_farm_shop: ERROR: LookupShopLineupParam signature not found");
         return;
     };
     let target = match_addr - LOOKUP_SHOP_LINEUP_OFFSET as u64;
-    log(&format!("anti_farm_shop: LookupShopLineup at {target:#x}"));
-    hooks::install_retn("anti_farm_shop: LookupShopLineup", target, lookup_shop_lineup_detour);
+    log(&format!("anti_farm_shop: LookupShopLineupParam at {target:#x}"));
+    hooks::install_retn("anti_farm_shop: LookupShopLineupParam", target, lookup_shop_lineup_detour);
 }
 
 // ---- The grace menu option ----

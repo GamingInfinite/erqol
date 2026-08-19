@@ -13,7 +13,7 @@ use crate::scan;
 const HEAVY_DOOR_MESSAGE_ID: i32 = 4200;
 const DISPATCH_PATTERN: &str = "49 8B 80 D0 00 00 00 8B 48 04 FF C9 83 F9 0F";
 const DISPATCH_HOOK_OFFSET: usize = 12; // after `FF C9`
-const COMPUTE_ARGS_PTR_ADDR: u64 = 0x140CE0C00;
+const GET_EVENT_ARGS_FROM_EMEVD_FILE_ADDR: u64 = 0x140CE0C00;
 
 pub static HEAVY_DOOR_INSTALLER: Once = Once::new();
 
@@ -49,7 +49,7 @@ fn heavy_door_detour(regs: *mut Registers) {
             let context = memory::read_qword(r8 + 0xC8);
             let args_offset = memory::read_qword(rax + 16);
             type ComputeArgs = extern "C" fn(u64, u64) -> u64;
-            let compute: ComputeArgs = std::mem::transmute(COMPUTE_ARGS_PTR_ADDR);
+            let compute: ComputeArgs = std::mem::transmute(GET_EVENT_ARGS_FROM_EMEVD_FILE_ADDR);
             args_ptr = compute(context, args_offset);
         }
 
