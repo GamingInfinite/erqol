@@ -18,7 +18,6 @@ const MSG_ANTI_FARM: i32 = 69_990_024;
 const MSG_CONSUME_RUNES: i32 = 69_990_025;
 const MSG_MERCHANT_BELL: i32 = 69_990_026;
 const MSG_ROUNDTABLE: i32 = 69_990_027;
-const MSG_NO_TIME_DEATH: i32 = 69_990_028;
 
 const OPTION_INDEX: i32 = 72;
 
@@ -80,12 +79,6 @@ const FEATURES: &[Feature] = &[
         action: toggle_roundtable,
         needs_reload: false,
     },
-    Feature {
-        name: "no_time_on_death",
-        message_id: MSG_NO_TIME_DEATH,
-        action: toggle_no_time_death,
-        needs_reload: false,
-    },
 ];
 
 fn config_value(name: &str) -> bool {
@@ -99,7 +92,6 @@ fn config_value(name: &str) -> bool {
         "consume_all_runes" => cfg.consume_all_runes,
         "merchant_bell_bearing" => cfg.merchant_bell_bearing,
         "roundtable_at_home" => cfg.roundtable_at_home,
-        "no_time_on_death" => cfg.no_time_on_death,
         _ => true,
     }
 }
@@ -120,7 +112,6 @@ fn feature_label(name: &str, enabled: bool, needs_reload: bool) -> String {
         "consume_all_runes" => "Consume All Runes",
         "merchant_bell_bearing" => "Merchant Bell Bearing",
         "roundtable_at_home" => "Roundtable at Home",
-        "no_time_on_death" => "No Time on Death",
         _ => name,
     };
     format!("{state} {base}{suffix}")
@@ -222,17 +213,6 @@ unsafe extern "C" fn toggle_map_in_combat() {
     log("grace_settings: map_in_combat toggled; restart to apply");
 }
 
-unsafe extern "C" fn toggle_no_time_death() {
-    let mut cfg = config::config().lock().unwrap_or_else(|e| e.into_inner());
-    cfg.no_time_on_death = !cfg.no_time_on_death;
-    let new_val = cfg.no_time_on_death;
-    drop(cfg);
-    config::save();
-    crate::no_time_on_death::set_enabled(new_val);
-    let enabled_str = if new_val { "ON" } else { "OFF" };
-    update_message(MSG_NO_TIME_DEATH, &feature_label("no_time_on_death", new_val, false));
-    log(format!("grace_settings: no_time_on_death toggled to {enabled_str}; active now"));
-}
 
 // ---- Feature wiring ----
 

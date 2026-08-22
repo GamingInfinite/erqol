@@ -746,6 +746,34 @@ pub(crate) unsafe fn splice_option(
     message_id: i32,
     target_state: *mut State,
 ) -> bool {
+    fn anchor(event: &Event) -> bool {
+        unsafe { is_sort_chest_event(event) }
+    }
+    unsafe { splice_option_anchored(state_group, option_index, message_id, target_state, anchor) }
+}
+
+/// Like [`splice_option`], but anchors on any state whose entry events contain
+/// a plain `AddTalkListData` command (e.g. the Roundtable Hold mirror menu),
+/// rather than the grace menu's SortChest row.
+pub(crate) unsafe fn splice_talk_list_option(
+    state_group: *mut StateGroup,
+    option_index: i32,
+    message_id: i32,
+    target_state: *mut State,
+) -> bool {
+    fn anchor(event: &Event) -> bool {
+        event.command == ADD_TALK_LIST_DATA
+    }
+    unsafe { splice_option_anchored(state_group, option_index, message_id, target_state, anchor) }
+}
+
+unsafe fn splice_option_anchored(
+    state_group: *mut StateGroup,
+    option_index: i32,
+    message_id: i32,
+    target_state: *mut State,
+    anchor: fn(&Event) -> bool,
+) -> bool {
     let states = unsafe { slice_of((*state_group).states) };
 
     let mut add_menu_state: Option<*mut State> = None;
@@ -756,7 +784,7 @@ pub(crate) unsafe fn splice_option(
         let state_ptr = state as *const State as *mut State;
 
         for (i, event) in unsafe { slice_of(state.entry_events) }.iter().enumerate() {
-            if unsafe { is_sort_chest_event(event) } {
+            if anchor(event) {
                 add_menu_state = Some(state_ptr);
                 event_index = i as i32;
             }
@@ -1133,7 +1161,7 @@ pub(crate) fn register_message(message_id: i32, text: &str) {
 /// Diagnostic logger: logs every talk-script state entry (group id in the
 /// 2147483xxx talk range) so merchant conversations can be correlated against
 /// runtime machine/group pointers. Set to `false` to disable.
-const DIAG_LOG_STATE_ENTRIES: bool = false;
+const DIAG_LOG_STATE_ENTRIES: bool = true;
 
 fn ezstate_enter_state_detour(regs: *mut Registers, original: usize) -> usize {
     let state = unsafe { (*regs).rcx } as *mut State;

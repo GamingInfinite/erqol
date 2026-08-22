@@ -8,23 +8,14 @@ use windows::Win32::System::Diagnostics::Debug::{
     AddVectoredExceptionHandler, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS,
 };
 
-mod anti_farm_shop;
-mod auto_pickup;
 mod config;
-mod consume_all_runes;
-mod dungeon_warp;
 mod ezstate_menu;
-mod grace_settings;
-mod heavy_door;
 mod hooks;
 mod log;
-mod map_in_combat;
 mod memory;
-mod merchant_bell_bearing;
-mod no_time_on_death;
-mod roundtable_at_home;
+mod postures;
+mod qol;
 mod scan;
-mod skip_flask_confirm;
 
 // ---- Crash logging (VEH) ----
 
@@ -171,18 +162,21 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
         let cs_task = CSTaskImp::wait_for_instance(Duration::MAX).unwrap();
         cs_task.run_recurring(
             |_: &FD4TaskData| {
-                auto_pickup::AUTO_PICKUP_INSTALLER.call_once(auto_pickup::install_auto_pickup_hook);
-                map_in_combat::MAP_IN_COMBAT_INSTALLER.call_once(map_in_combat::install);
-                heavy_door::HEAVY_DOOR_INSTALLER.call_once(heavy_door::install);
-                no_time_on_death::NO_TIME_ON_DEATH_INSTALLER.call_once(no_time_on_death::install);
-                dungeon_warp::patch();
+                qol::auto_pickup::AUTO_PICKUP_INSTALLER
+                    .call_once(qol::auto_pickup::install_auto_pickup_hook);
+                qol::map_in_combat::MAP_IN_COMBAT_INSTALLER.call_once(qol::map_in_combat::install);
+                qol::heavy_door::HEAVY_DOOR_INSTALLER.call_once(qol::heavy_door::install);
+                qol::dungeon_warp::patch();
+                postures::effects::tick();
+                postures::hks_inject::INSTALLER.call_once(postures::hks_inject::install);
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
-                    anti_farm_shop::init();
-                    consume_all_runes::init();
-                    skip_flask_confirm::init();
-                    merchant_bell_bearing::init();
-                    roundtable_at_home::init();
-                    grace_settings::init();
+                    qol::anti_farm_shop::init();
+                    qol::consume_all_runes::init();
+                    qol::skip_flask_confirm::init();
+                    qol::merchant_bell_bearing::init();
+                    qol::roundtable_at_home::init();
+                    qol::grace_settings::init();
+                    postures::mirror_menu::init();
                     ezstate_menu::install();
                 });
             },
