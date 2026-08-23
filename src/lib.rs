@@ -203,6 +203,8 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 qol::map_in_combat::MAP_IN_COMBAT_INSTALLER.call_once(qol::map_in_combat::install);
                 qol::heavy_door::HEAVY_DOOR_INSTALLER.call_once(qol::heavy_door::install);
                 qol::dungeon_warp::patch();
+                postures::speffects::SPEFFECTS_INSTALLER
+                    .call_once(postures::speffects::install);
                 postures::effects::tick();
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
                     qol::anti_farm_shop::init();
