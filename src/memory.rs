@@ -9,6 +9,10 @@ use windows::Win32::System::Memory::{
 
 // ---- Volatile reads ----
 
+pub unsafe fn read_byte(addr: u64) -> u8 {
+    unsafe { std::ptr::read_volatile(addr as *const u8) }
+}
+
 pub unsafe fn read_qword(addr: u64) -> u64 {
     unsafe { std::ptr::read_volatile(addr as *const u64) }
 }

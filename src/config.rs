@@ -14,7 +14,13 @@ pub struct Config {
     pub consume_all_runes: bool,
     pub merchant_bell_bearing: bool,
     pub roundtable_at_home: bool,
-    pub no_time_on_death: bool,
+    pub postures_enabled: bool,
+    pub postures_hks_inject: bool,
+    pub posture_body: i32,
+    pub posture_right_arm: i32,
+    pub posture_left_arm: i32,
+    pub posture_movement: i32,
+    pub posture_alternative_landing: bool,
 }
 
 impl Default for Config {
@@ -28,7 +34,13 @@ impl Default for Config {
             consume_all_runes: true,
             merchant_bell_bearing: true,
             roundtable_at_home: true,
-            no_time_on_death: true,
+            postures_enabled: true,
+            postures_hks_inject: true,
+            posture_body: 0,
+            posture_right_arm: 0,
+            posture_left_arm: 0,
+            posture_movement: 0,
+            posture_alternative_landing: false,
         }
     }
 }
@@ -88,13 +100,19 @@ pub fn load() {
             "consume_all_runes" => cfg.consume_all_runes = parse_bool(value),
             "merchant_bell_bearing" => cfg.merchant_bell_bearing = parse_bool(value),
             "roundtable_at_home" => cfg.roundtable_at_home = parse_bool(value),
-            "no_time_on_death" => cfg.no_time_on_death = parse_bool(value),
+            "postures_enabled" => cfg.postures_enabled = parse_bool(value),
+            "postures_hks_inject" => cfg.postures_hks_inject = parse_bool(value),
+            "posture_body" => cfg.posture_body = value.parse().unwrap_or(0),
+            "posture_right_arm" => cfg.posture_right_arm = value.parse().unwrap_or(0),
+            "posture_left_arm" => cfg.posture_left_arm = value.parse().unwrap_or(0),
+            "posture_movement" => cfg.posture_movement = value.parse().unwrap_or(0),
+            "posture_alternative_landing" => cfg.posture_alternative_landing = parse_bool(value),
             _ => {}
         }
     }
 
     log(format!(
-        "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} ntod={}",
+         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={}",
         path.display(),
         cfg.dungeon_warp,
         cfg.map_in_combat,
@@ -104,7 +122,13 @@ pub fn load() {
         cfg.consume_all_runes,
         cfg.merchant_bell_bearing,
         cfg.roundtable_at_home,
-        cfg.no_time_on_death,
+        cfg.postures_enabled,
+        cfg.postures_hks_inject,
+        cfg.posture_body,
+        cfg.posture_right_arm,
+        cfg.posture_left_arm,
+        cfg.posture_movement,
+        cfg.posture_alternative_landing,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -121,7 +145,7 @@ pub fn save() {
          # Runtime-toggleable features (no restart needed):\n\
          #   auto_pickup, skip_flask_confirm, anti_farm_shop,\n\
          #   consume_all_runes, merchant_bell_bearing, roundtable_at_home,\n\
-         #   no_time_on_death\n\
+         #   postures_enabled\n\
          \n\
          dungeon_warp = {dungeon_warp}\n\
          map_in_combat = {map_in_combat}\n\
@@ -131,7 +155,13 @@ pub fn save() {
          consume_all_runes = {consume_all_runes}\n\
          merchant_bell_bearing = {merchant_bell_bearing}\n\
          roundtable_at_home = {roundtable_at_home}\n\
-         no_time_on_death = {no_time_on_death}\n",
+         postures_enabled = {postures_enabled}\n\
+         postures_hks_inject = {postures_hks_inject}\n\
+         posture_body = {posture_body}\n\
+         posture_right_arm = {posture_right_arm}\n\
+         posture_left_arm = {posture_left_arm}\n\
+         posture_movement = {posture_movement}\n\
+         posture_alternative_landing = {posture_alternative_landing}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -140,7 +170,13 @@ pub fn save() {
         consume_all_runes = cfg.consume_all_runes,
         merchant_bell_bearing = cfg.merchant_bell_bearing,
         roundtable_at_home = cfg.roundtable_at_home,
-        no_time_on_death = cfg.no_time_on_death,
+        postures_enabled = cfg.postures_enabled,
+        postures_hks_inject = cfg.postures_hks_inject,
+        posture_body = cfg.posture_body,
+        posture_right_arm = cfg.posture_right_arm,
+        posture_left_arm = cfg.posture_left_arm,
+        posture_movement = cfg.posture_movement,
+        posture_alternative_landing = cfg.posture_alternative_landing,
     );
     drop(cfg);
 
@@ -163,5 +199,4 @@ pub static DUNGEON_WARP_ENABLED: AtomicBool = AtomicBool::new(true);
 pub fn apply_to_runtime() {
     let cfg = config().lock().unwrap_or_else(|e| e.into_inner());
     DUNGEON_WARP_ENABLED.store(cfg.dungeon_warp, Ordering::Relaxed);
-    crate::no_time_on_death::set_enabled(cfg.no_time_on_death);
 }

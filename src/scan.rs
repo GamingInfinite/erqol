@@ -13,6 +13,28 @@ pub fn scan_pattern(pattern_str: &str) -> Option<u64> {
     }
 }
 
+/// Returns up to `limit` VAs matching the pattern, so callers can verify that
+/// a signature is unique before hooking or patching anything.
+pub fn scan_pattern_all(pattern_str: &str, limit: usize) -> Vec<u64> {
+    let program = Program::current();
+    let Ok(atoms) = pattern::parse(pattern_str) else {
+        return Vec::new();
+    };
+    let mut matches = program.scanner().matches_code(&atoms);
+    let mut out = Vec::new();
+    loop {
+        let mut captures = [0u32; 1];
+        if !matches.next(&mut captures) || out.len() >= limit {
+            break;
+        }
+        match program.rva_to_va(captures[0]) {
+            Ok(va) => out.push(va),
+            Err(_) => break,
+        }
+    }
+    out
+}
+
 /// Scans for a pattern that ends with a relative call (`e8 ?? ?? ?? ??`) and
 /// returns the VA of the call *target* rather than the match start. Patterns
 /// passed here should end in `e8 $ '` so the `$` follows the call and the

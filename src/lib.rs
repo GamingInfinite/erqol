@@ -146,6 +146,27 @@ fn install_veh() {
     log::log("VEH: exception handler installed");
 }
 
+/// Rust panics don't reach the VEH; without this hook a panic in the init
+/// worker kills the thread (and via abort sometimes the process) with zero
+/// trace. Logs the panic to crash.log, then defers to the default printer.
+fn install_panic_logger() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<non-string panic>");
+        log::crash_log(&format!("PANIC: {msg} at {loc}"));
+        default_hook(info);
+    }));
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
     if reason != 1 {
@@ -156,8 +177,14 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
     install_veh();
 
     std::thread::spawn(|| {
+        install_panic_logger();
         config::load();
         config::apply_to_runtime();
+
+        // Install the HKS executor hooks as early as possible: at this point
+        // the game's script VM has not started executing c0000.hks yet, so we
+        // cannot race its threads while patching executor prologues/epilogues.
+        postures::hks_inject::INSTALLER.call_once(postures::hks_inject::install);
 
         let cs_task = CSTaskImp::wait_for_instance(Duration::MAX).unwrap();
         cs_task.run_recurring(
@@ -168,7 +195,6 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 qol::heavy_door::HEAVY_DOOR_INSTALLER.call_once(qol::heavy_door::install);
                 qol::dungeon_warp::patch();
                 postures::effects::tick();
-                postures::hks_inject::INSTALLER.call_once(postures::hks_inject::install);
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
                     qol::anti_farm_shop::init();
                     qol::consume_all_runes::init();

@@ -7,6 +7,9 @@
 - When using GhidraMCP tools, send only ONE command at a time and wait for
   its response before sending the next. The Ghidra bridge does not handle
   concurrent requests safely.
+- Do NOT launch Elden Ring (or any game) yourself. When a change needs an
+  in-game test run, ask the user to run it, then inspect the logs afterwards
+  (`/mnt/BARGE/FromSoftModding/ERQoL/logs/erqol.log` and `crash.log`).
 
 # Building
 
