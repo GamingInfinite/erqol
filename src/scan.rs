@@ -13,6 +13,7 @@ pub fn scan_pattern(pattern_str: &str) -> Option<u64> {
     }
 }
 
+#[allow(dead_code)]
 /// Returns up to `limit` VAs matching the pattern, so callers can verify that
 /// a signature is unique before hooking or patching anything.
 pub fn scan_pattern_all(pattern_str: &str, limit: usize) -> Vec<u64> {

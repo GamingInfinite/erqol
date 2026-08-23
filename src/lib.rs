@@ -20,7 +20,11 @@ mod scan;
 // ---- Crash logging (VEH) ----
 
 fn hex_words(words: &[u64]) -> String {
-    words.iter().map(|w| format!("{w:#x}")).collect::<Vec<_>>().join(" ")
+    words
+        .iter()
+        .map(|w| format!("{w:#x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Dumps the ESD machine context around a crash: the machine's current state,
@@ -47,7 +51,9 @@ fn dump_machine_context(machine: usize) {
         return;
     };
     let tlen = memory::safe_read_u64(state_addr + 0x10).unwrap_or(0) as usize;
-    log::crash_log(&format!("VEH:   state->transitions ptr={tptr:#x} len={tlen}"));
+    log::crash_log(&format!(
+        "VEH:   state->transitions ptr={tptr:#x} len={tlen}"
+    ));
 
     let mut entries: Vec<u64> = Vec::new();
     for i in 0..tlen.min(4) {
@@ -59,7 +65,11 @@ fn dump_machine_context(machine: usize) {
             }
         }
     }
-    log::crash_log(&format!("VEH:   transitions[0..{}] = {}", entries.len(), hex_words(&entries)));
+    log::crash_log(&format!(
+        "VEH:   transitions[0..{}] = {}",
+        entries.len(),
+        hex_words(&entries)
+    ));
 
     for (i, &t) in entries.iter().enumerate() {
         if t == 0 {
@@ -102,12 +112,16 @@ unsafe extern "system" fn on_exception(exception_info: *mut EXCEPTION_POINTERS) 
 
     let is_av = code == 0xc0000005;
     if !is_av {
-        log::crash_log(&format!("VEH: exception code={code:#x} at {address:p} nparams={params}"));
+        log::crash_log(&format!(
+            "VEH: exception code={code:#x} at {address:p} nparams={params}"
+        ));
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
     // Access violation — log everything.
-    log::crash_log(&format!("VEH: AV code={code:#x} at {address:p} nparams={params}"));
+    log::crash_log(&format!(
+        "VEH: AV code={code:#x} at {address:p} nparams={params}"
+    ));
     if params >= 2 {
         let op = unsafe { (*record).ExceptionInformation[0] };
         let target = unsafe { (*record).ExceptionInformation[1] };
@@ -180,11 +194,6 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
         install_panic_logger();
         config::load();
         config::apply_to_runtime();
-
-        // Install the HKS executor hooks as early as possible: at this point
-        // the game's script VM has not started executing c0000.hks yet, so we
-        // cannot race its threads while patching executor prologues/epilogues.
-        postures::hks_inject::INSTALLER.call_once(postures::hks_inject::install);
 
         let cs_task = CSTaskImp::wait_for_instance(Duration::MAX).unwrap();
         cs_task.run_recurring(
