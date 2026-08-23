@@ -196,6 +196,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
         config::apply_to_runtime();
 
         let cs_task = CSTaskImp::wait_for_instance(Duration::MAX).unwrap();
+        postures::hks::HKS_INSTALLER.call_once(postures::hks::install);
         cs_task.run_recurring(
             |_: &FD4TaskData| {
                 qol::auto_pickup::AUTO_PICKUP_INSTALLER
