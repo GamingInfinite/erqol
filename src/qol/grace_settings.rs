@@ -18,6 +18,7 @@ const MSG_ANTI_FARM: i32 = 69_990_024;
 const MSG_CONSUME_RUNES: i32 = 69_990_025;
 const MSG_MERCHANT_BELL: i32 = 69_990_026;
 const MSG_ROUNDTABLE: i32 = 69_990_027;
+const MSG_HP_BAR_TRACKS: i32 = 69_990_028;
 
 const OPTION_INDEX: i32 = 72;
 
@@ -79,6 +80,12 @@ const FEATURES: &[Feature] = &[
         action: toggle_roundtable,
         needs_reload: false,
     },
+    Feature {
+        name: "hp_bar_tracks",
+        message_id: MSG_HP_BAR_TRACKS,
+        action: cycle_hp_bar_tracks,
+        needs_reload: false,
+    },
 ];
 
 fn config_value(name: &str) -> bool {
@@ -92,11 +99,21 @@ fn config_value(name: &str) -> bool {
         "consume_all_runes" => cfg.consume_all_runes,
         "merchant_bell_bearing" => cfg.merchant_bell_bearing,
         "roundtable_at_home" => cfg.roundtable_at_home,
+        "hp_bar_tracks" => cfg.hp_bar_tracks == config::HpBarTracks::Posture,
         _ => true,
     }
 }
 
 fn feature_label(name: &str, enabled: bool, needs_reload: bool) -> String {
+    if name == "hp_bar_tracks" {
+        let cfg = config::config().lock().unwrap_or_else(|e| e.into_inner());
+        let tracks = match cfg.hp_bar_tracks {
+            config::HpBarTracks::Hp => "HP",
+            config::HpBarTracks::Posture => "Posture",
+        };
+        return format!("HP Bar Tracks: {tracks}");
+    }
+
     let state = if enabled { "[ON]" } else { "[OFF]" };
     let suffix = if needs_reload {
         " (restart to change)"
@@ -187,6 +204,18 @@ unsafe extern "C" fn toggle_roundtable() {
     config::save();
     update_message(MSG_ROUNDTABLE, &feature_label(name, enabled, needs_reload));
     log("grace_settings: roundtable_at_home toggled; active now");
+}
+
+unsafe extern "C" fn cycle_hp_bar_tracks() {
+    let mut cfg = config::config().lock().unwrap_or_else(|e| e.into_inner());
+    cfg.hp_bar_tracks = match cfg.hp_bar_tracks {
+        config::HpBarTracks::Hp => config::HpBarTracks::Posture,
+        config::HpBarTracks::Posture => config::HpBarTracks::Hp,
+    };
+    drop(cfg);
+    config::save();
+    update_message(MSG_HP_BAR_TRACKS, &feature_label("hp_bar_tracks", false, false));
+    log("grace_settings: hp_bar_tracks cycled; live");
 }
 
 unsafe extern "C" fn toggle_dungeon_warp() {

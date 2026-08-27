@@ -4,6 +4,30 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::log::{self, log};
 
+/// What the damage readout above boss health bars tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HpBarTracks {
+    /// Default game behaviour: shows the recent HP damage dealt.
+    Hp,
+    /// Shows the boss's remaining posture (stagger) instead.
+    Posture,
+}
+
+impl Default for HpBarTracks {
+    fn default() -> Self {
+        HpBarTracks::Hp
+    }
+}
+
+impl HpBarTracks {
+    fn as_str(self) -> &'static str {
+        match self {
+            HpBarTracks::Hp => "hp",
+            HpBarTracks::Posture => "posture",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub dungeon_warp: bool,
@@ -21,6 +45,7 @@ pub struct Config {
     pub posture_left_arm: i32,
     pub posture_movement: i32,
     pub posture_alternative_landing: bool,
+    pub hp_bar_tracks: HpBarTracks,
 }
 
 impl Default for Config {
@@ -41,6 +66,7 @@ impl Default for Config {
             posture_left_arm: 0,
             posture_movement: 0,
             posture_alternative_landing: false,
+            hp_bar_tracks: HpBarTracks::Hp,
         }
     }
 }
@@ -67,6 +93,13 @@ fn settings_path() -> Option<PathBuf> {
 
 fn parse_bool(value: &str) -> bool {
     matches!(value.trim(), "true" | "1" | "yes")
+}
+
+fn parse_hp_bar_tracks(value: &str) -> HpBarTracks {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "posture" | "p" | "poise" => HpBarTracks::Posture,
+        _ => HpBarTracks::Hp,
+    }
 }
 
 pub fn load() {
@@ -107,6 +140,7 @@ pub fn load() {
             "posture_left_arm" => cfg.posture_left_arm = value.parse().unwrap_or(0),
             "posture_movement" => cfg.posture_movement = value.parse().unwrap_or(0),
             "posture_alternative_landing" => cfg.posture_alternative_landing = parse_bool(value),
+            "hp_bar_tracks" => cfg.hp_bar_tracks = parse_hp_bar_tracks(value),
             _ => {}
         }
     }
@@ -124,11 +158,11 @@ pub fn load() {
         cfg.roundtable_at_home,
         cfg.postures_enabled,
         cfg.postures_hks_inject,
-        cfg.posture_body,
+         cfg.posture_body,
         cfg.posture_right_arm,
         cfg.posture_left_arm,
         cfg.posture_movement,
-        cfg.posture_alternative_landing,
+         cfg.posture_alternative_landing,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -161,7 +195,8 @@ pub fn save() {
          posture_right_arm = {posture_right_arm}\n\
          posture_left_arm = {posture_left_arm}\n\
          posture_movement = {posture_movement}\n\
-         posture_alternative_landing = {posture_alternative_landing}\n",
+          posture_alternative_landing = {posture_alternative_landing}\n\
+          hp_bar_tracks = {hp_bar_tracks}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -177,6 +212,7 @@ pub fn save() {
         posture_left_arm = cfg.posture_left_arm,
         posture_movement = cfg.posture_movement,
         posture_alternative_landing = cfg.posture_alternative_landing,
+        hp_bar_tracks = cfg.hp_bar_tracks.as_str(),
     );
     drop(cfg);
 
