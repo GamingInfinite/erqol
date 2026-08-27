@@ -46,6 +46,7 @@ pub struct Config {
     pub posture_movement: i32,
     pub posture_alternative_landing: bool,
     pub hp_bar_tracks: HpBarTracks,
+    pub spirit_summon_everywhere: bool,
 }
 
 impl Default for Config {
@@ -67,6 +68,7 @@ impl Default for Config {
             posture_movement: 0,
             posture_alternative_landing: false,
             hp_bar_tracks: HpBarTracks::Hp,
+            spirit_summon_everywhere: true,
         }
     }
 }
@@ -141,12 +143,13 @@ pub fn load() {
             "posture_movement" => cfg.posture_movement = value.parse().unwrap_or(0),
             "posture_alternative_landing" => cfg.posture_alternative_landing = parse_bool(value),
             "hp_bar_tracks" => cfg.hp_bar_tracks = parse_hp_bar_tracks(value),
+            "spirit_summon_everywhere" => cfg.spirit_summon_everywhere = parse_bool(value),
             _ => {}
         }
     }
 
     log(format!(
-         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={}",
+         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={}",
         path.display(),
         cfg.dungeon_warp,
         cfg.map_in_combat,
@@ -161,8 +164,9 @@ pub fn load() {
          cfg.posture_body,
         cfg.posture_right_arm,
         cfg.posture_left_arm,
-        cfg.posture_movement,
+         cfg.posture_movement,
          cfg.posture_alternative_landing,
+         cfg.spirit_summon_everywhere,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -196,7 +200,8 @@ pub fn save() {
          posture_left_arm = {posture_left_arm}\n\
          posture_movement = {posture_movement}\n\
           posture_alternative_landing = {posture_alternative_landing}\n\
-          hp_bar_tracks = {hp_bar_tracks}\n",
+          hp_bar_tracks = {hp_bar_tracks}\n\
+          spirit_summon_everywhere = {spirit_summon_everywhere}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -213,6 +218,7 @@ pub fn save() {
         posture_movement = cfg.posture_movement,
         posture_alternative_landing = cfg.posture_alternative_landing,
         hp_bar_tracks = cfg.hp_bar_tracks.as_str(),
+        spirit_summon_everywhere = cfg.spirit_summon_everywhere,
     );
     drop(cfg);
 

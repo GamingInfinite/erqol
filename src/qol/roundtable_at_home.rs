@@ -1,25 +1,28 @@
 use std::ptr;
+use std::sync::LazyLock;
 
 use crate::config;
 use crate::ezstate_menu::{
-    COMBINE_MENU_FLAG_AND_EVENT_FLAG, Event, OPEN_BUDDY_UPGRADE_MENU, OPEN_ENHANCE_SHOP,
-    OPEN_EQUIPMENT_CHANGE_OF_PURPOSE_SHOP, OPEN_REGULAR_SHOP, OPEN_SELL_SHOP, Span, State,
-    StateGroup, SubMenu, Transition, make_int_expression, make_menu_closed_expr, register_message,
-    register_patcher, splice_option,
+    alloc_message_id, COMBINE_MENU_FLAG_AND_EVENT_FLAG, Event, OPEN_BUDDY_UPGRADE_MENU,
+    OPEN_ENHANCE_SHOP, OPEN_EQUIPMENT_CHANGE_OF_PURPOSE_SHOP, OPEN_REGULAR_SHOP, OPEN_SELL_SHOP,
+    Span, State, StateGroup, SubMenu, Transition, make_int_expression, make_menu_closed_expr,
+    register_message, register_patcher, splice_option,
 };
 use crate::log::log;
 
 // ---- Message IDs ----
+//
+// Allocated from the shared allocator so they never collide with another module.
 
-const MSG_ROUNDTABLE: i32 = 69_990_030;
-const MSG_HEWG: i32 = 69_990_031;
-const MSG_RODERIKA: i32 = 69_990_032;
-const MSG_TMH: i32 = 69_990_033;
-const MSG_ENHANCE: i32 = 69_990_034;
-const MSG_AOW: i32 = 69_990_035;
-const MSG_SPIRIT_TUNING: i32 = 69_990_036;
-const MSG_BUY: i32 = 69_990_037;
-const MSG_SELL: i32 = 69_990_038;
+static MSG_ROUNDTABLE: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_HEWG: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_RODERIKA: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_TMH: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_ENHANCE: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_AOW: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_SPIRIT_TUNING: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_BUY: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_SELL: LazyLock<i32> = LazyLock::new(alloc_message_id);
 const MSG_CANCEL: i32 = 69_990_003;
 
 const OPTION_INDEX: i32 = 71;
@@ -205,17 +208,17 @@ unsafe fn patch_grace(state_group: *mut StateGroup) -> bool {
         }
 
         let hewg_rows: &[(i32, i32, bool, Option<crate::ezstate_menu::SubMenuAction>)] = &[
-            (1, MSG_ENHANCE, false, None),
-            (2, MSG_AOW, false, None),
+            (1, *MSG_ENHANCE, false, None),
+            (2, *MSG_AOW, false, None),
             (99, MSG_CANCEL, true, None),
         ];
         let roderika_rows: &[(i32, i32, bool, Option<crate::ezstate_menu::SubMenuAction>)] = &[
-            (1, MSG_SPIRIT_TUNING, false, None),
+            (1, *MSG_SPIRIT_TUNING, false, None),
             (99, MSG_CANCEL, true, None),
         ];
         let tmh_rows: &[(i32, i32, bool, Option<crate::ezstate_menu::SubMenuAction>)] = &[
-            (1, MSG_BUY, false, None),
-            (2, MSG_SELL, false, None),
+            (1, *MSG_BUY, false, None),
+            (2, *MSG_SELL, false, None),
             (99, MSG_CANCEL, true, None),
         ];
 
@@ -260,9 +263,9 @@ unsafe fn patch_grace(state_group: *mut StateGroup) -> bool {
             make_command_state(&[], OPEN_SELL_SHOP, &[-1, -1], MENU_TYPE_SELL, tmh_state);
 
         let top_rows: &[(i32, i32, bool, Option<crate::ezstate_menu::SubMenuAction>)] = &[
-            (1, MSG_HEWG, false, None),
-            (2, MSG_RODERIKA, false, None),
-            (3, MSG_TMH, false, None),
+            (1, *MSG_HEWG, false, None),
+            (2, *MSG_RODERIKA, false, None),
+            (3, *MSG_TMH, false, None),
             (99, MSG_CANCEL, true, None),
         ];
         let top_menu = Box::into_raw(Box::new(SubMenu::new(top_rows)));
@@ -285,22 +288,22 @@ unsafe fn patch_grace(state_group: *mut StateGroup) -> bool {
         SubMenu::set_option_target(top_menu, 2, tmh_linked);
 
         log("roundtable_at_home: patched grace menu");
-        splice_option(state_group, OPTION_INDEX, MSG_ROUNDTABLE, top_state)
+        splice_option(state_group, OPTION_INDEX, *MSG_ROUNDTABLE, top_state)
     }
 }
 
 // ---- Installer ----
 
 pub(crate) fn init() {
-    register_message(MSG_ROUNDTABLE, "Roundtable at Home");
-    register_message(MSG_HEWG, "Hewg");
-    register_message(MSG_RODERIKA, "Roderika");
-    register_message(MSG_TMH, "Twin Maiden Husks");
-    register_message(MSG_ENHANCE, "Strengthen Armament");
-    register_message(MSG_AOW, "Ash of War Duplication");
-    register_message(MSG_SPIRIT_TUNING, "Spirit Tuning");
-    register_message(MSG_BUY, "Purchase");
-    register_message(MSG_SELL, "Sell");
+    register_message(*MSG_ROUNDTABLE, "Roundtable at Home");
+    register_message(*MSG_HEWG, "Hewg");
+    register_message(*MSG_RODERIKA, "Roderika");
+    register_message(*MSG_TMH, "Twin Maiden Husks");
+    register_message(*MSG_ENHANCE, "Strengthen Armament");
+    register_message(*MSG_AOW, "Ash of War Duplication");
+    register_message(*MSG_SPIRIT_TUNING, "Spirit Tuning");
+    register_message(*MSG_BUY, "Purchase");
+    register_message(*MSG_SELL, "Sell");
     register_message(MSG_CANCEL, "Cancel");
 
     register_patcher(patch_grace);

@@ -9,6 +9,7 @@
 //! untouched.
 
 use std::ptr;
+use std::sync::LazyLock;
 use std::sync::OnceLock;
 
 use eldenring::param::SHOP_LINEUP_PARAM;
@@ -17,8 +18,8 @@ use ilhook::x64::Registers;
 use crate::config;
 use crate::hooks;
 use crate::ezstate_menu::{
-    Event, OPEN_REGULAR_SHOP, SHOP_MENU_CLOSED_EXPR, Span, State, StateGroup, Transition,
-    make_int_expression, register_message, register_message_in_bnd, register_patcher,
+    alloc_message_id, Event, OPEN_REGULAR_SHOP, SHOP_MENU_CLOSED_EXPR, Span, State, StateGroup,
+    Transition, make_int_expression, register_message, register_message_in_bnd, register_patcher,
     splice_option,
 };
 use crate::log::log;
@@ -31,10 +32,10 @@ const SHOP_ID: i32 = 9_500_000;
 /// Grace menu row for the option. Index 70 is used by Elden Ring Reforged
 /// ("Reforged options"), so ERQoL uses 73 to avoid overlapping.
 const OPTION_INDEX: i32 = 73;
-const MSG_ANTI_FARM_SHOP: i32 = 69_990_004;
+static MSG_ANTI_FARM_SHOP: LazyLock<i32> = LazyLock::new(alloc_message_id);
 
 /// Shop title message, served from the menu text bound.
-const MSG_SHOP_TITLE: i32 = 69_990_005;
+static MSG_SHOP_TITLE: LazyLock<i32> = LazyLock::new(alloc_message_id);
 const MSGBND_MENU_TEXT: u32 = 200;
 
 const GOLD_FIREFLY: (i32, i32) = (20811, 500);
@@ -88,7 +89,7 @@ fn make_lineup(equip_id: i32, price: i32) -> SHOP_LINEUP_PARAM {
     row.set_value_magnification(1.0);
     row.set_icon_id(-1);
     row.set_name_msg_id(-1);
-    row.set_menu_title_msg_id(MSG_SHOP_TITLE);
+    row.set_menu_title_msg_id(*MSG_SHOP_TITLE);
     row.set_menu_icon_id(-1);
     row
 }
@@ -272,7 +273,7 @@ unsafe fn patch_grace(state_group: *mut StateGroup) -> bool {
         splice_option(
             state_group,
             OPTION_INDEX,
-            MSG_ANTI_FARM_SHOP,
+            *MSG_ANTI_FARM_SHOP,
             make_shop_state(return_state),
         )
     };
@@ -285,8 +286,8 @@ unsafe fn patch_grace(state_group: *mut StateGroup) -> bool {
 // ---- Installer ----
 
 pub(crate) fn init() {
-    register_message(MSG_ANTI_FARM_SHOP, "Anti-Farm QoL Shop");
-    register_message_in_bnd(MSGBND_MENU_TEXT, MSG_SHOP_TITLE, "Anti-Farm QoL Shop");
+    register_message(*MSG_ANTI_FARM_SHOP, "Anti-Farm QoL Shop");
+    register_message_in_bnd(MSGBND_MENU_TEXT, *MSG_SHOP_TITLE, "Anti-Farm QoL Shop");
     register_patcher(patch_grace);
     install_lookup_shop_menu_hook();
     install_lookup_shop_lineup_hook();

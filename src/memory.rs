@@ -3,8 +3,8 @@
 #![allow(dead_code)]
 
 use windows::Win32::System::Memory::{
-    VirtualProtect, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_EXECUTE_READWRITE,
-    PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
+    VirtualAlloc, VirtualProtect, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT,
+    MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
 };
 
 // ---- Volatile reads ----
@@ -88,6 +88,60 @@ pub fn safe_read_u64(addr: usize) -> Option<u64> {
 pub struct MemoryRegion {
     pub base: usize,
     pub size: usize,
+}
+
+/// Allocates a readable/writable/executable region of `size` bytes. Tries to
+/// place it within ±2 GiB of `preferred_addr` so that a 32-bit relative jump
+/// can reach it, then falls back to any available address.
+pub unsafe fn alloc_executable(preferred_addr: u64, size: usize) -> Option<u64> {
+    const GRANULARITY: u64 = 0x1_0000;
+    const MAX_STEPS: usize = 0x8000; // 2 GiB / 64 KiB
+
+    let aligned = preferred_addr & !(GRANULARITY - 1);
+
+    // Search upward first: addresses >= the hook, up to +2 GiB.
+    for i in 0..MAX_STEPS {
+        let base = aligned.saturating_add(i as u64 * GRANULARITY);
+        let mem = unsafe {
+            VirtualAlloc(
+                Some(base as *const core::ffi::c_void),
+                size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READWRITE,
+            )
+        };
+        if !mem.is_null() {
+            return Some(mem as u64);
+        }
+    }
+
+    // Search downward: addresses < the hook, down to -2 GiB.
+    for i in 1..MAX_STEPS {
+        let base = aligned.saturating_sub(i as u64 * GRANULARITY);
+        if base == 0 {
+            break;
+        }
+        let mem = unsafe {
+            VirtualAlloc(
+                Some(base as *const core::ffi::c_void),
+                size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READWRITE,
+            )
+        };
+        if !mem.is_null() {
+            return Some(mem as u64);
+        }
+    }
+
+    // Last resort: let the OS pick the address. This may be too far for a
+    // 5-byte relative jmp, but callers can fall back to an absolute jump.
+    let mem = unsafe { VirtualAlloc(None, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) };
+    if mem.is_null() {
+        None
+    } else {
+        Some(mem as u64)
+    }
 }
 
 /// Enumerates all committed, readable memory regions in the current process.

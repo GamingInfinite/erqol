@@ -1,17 +1,22 @@
+use std::sync::LazyLock;
+
 use eldenring::cs::{EquipParamGoods, GameDataMan, SoloParamRepository};
 use fromsoftware_shared::FromStatic;
 
 use crate::config;
 use crate::ezstate_menu::{
-    register_message, register_patcher, splice_option, StateGroup, SubMenu, SubMenuAction,
+    alloc_message_id, register_message, register_patcher, splice_option, StateGroup, SubMenu,
+    SubMenuAction,
 };
 use crate::log::log;
 
-// ---- Message constants ----
+// ---- Message ids ----
+//
+// Allocated from the shared allocator so they never collide with another module.
 
-const MSG_CONSUME_ALL_RUNES: i32 = 69_990_000;
-const MSG_CONSUME_GOLDEN_RUNES: i32 = 69_990_001;
-const MSG_CONSUME_REMEMBRANCES: i32 = 69_990_002;
+static MSG_CONSUME_ALL_RUNES: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_CONSUME_GOLDEN_RUNES: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_CONSUME_REMEMBRANCES: LazyLock<i32> = LazyLock::new(alloc_message_id);
 const MSG_CANCEL: i32 = 69_990_003;
 const OPTION_INDEX: i32 = 69;
 
@@ -135,9 +140,9 @@ unsafe extern "C" fn consume_remembrances_action() {
 /// before `ezstate_menu::install()`.
 pub(crate) fn init() {
     register_patcher(patch);
-    register_message(MSG_CONSUME_ALL_RUNES, "Consume all Runes");
-    register_message(MSG_CONSUME_GOLDEN_RUNES, "Consume Golden Runes");
-    register_message(MSG_CONSUME_REMEMBRANCES, "Consume Remembrances");
+    register_message(*MSG_CONSUME_ALL_RUNES, "Consume all Runes");
+    register_message(*MSG_CONSUME_GOLDEN_RUNES, "Consume Golden Runes");
+    register_message(*MSG_CONSUME_REMEMBRANCES, "Consume Remembrances");
     register_message(MSG_CANCEL, "Cancel");
 }
 
@@ -156,13 +161,13 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
             &[
                 (
                     1,
-                    MSG_CONSUME_GOLDEN_RUNES,
+                    *MSG_CONSUME_GOLDEN_RUNES,
                     false,
                     Some(consume_golden_runes_action as SubMenuAction),
                 ),
                 (
                     2,
-                    MSG_CONSUME_REMEMBRANCES,
+                    *MSG_CONSUME_REMEMBRANCES,
                     false,
                     Some(consume_remembrances_action as SubMenuAction),
                 ),
@@ -174,7 +179,7 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
         splice_option(
             state_group,
             OPTION_INDEX,
-            MSG_CONSUME_ALL_RUNES,
+            *MSG_CONSUME_ALL_RUNES,
             submenu_state,
         )
     }

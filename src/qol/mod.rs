@@ -6,7 +6,6 @@ pub mod anti_farm_shop;
 pub mod auto_pickup;
 pub mod consume_all_runes;
 pub mod dungeon_warp;
-pub mod grace_settings;
 pub mod heavy_door;
 pub mod hp_bar_posture;
 pub mod map_in_combat;

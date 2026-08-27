@@ -10,12 +10,14 @@ use windows::Win32::System::Diagnostics::Debug::{
 
 mod config;
 mod ezstate_menu;
+mod grace_settings;
 mod hooks;
 mod log;
 mod memory;
 mod postures;
 mod qol;
 mod scan;
+mod tweaks;
 
 // ---- Crash logging (VEH) ----
 
@@ -215,7 +217,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                     qol::skip_flask_confirm::init();
                     qol::merchant_bell_bearing::init();
                     qol::roundtable_at_home::init();
-                    qol::grace_settings::init();
+                    grace_settings::init();
                     postures::mirror_menu::init();
                     ezstate_menu::install();
                 });

@@ -1,4 +1,5 @@
 use std::ptr;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, Once};
 
 use ilhook::x64::Registers;
@@ -6,6 +7,33 @@ use ilhook::x64::Registers;
 use crate::hooks;
 use crate::log::log;
 use crate::scan;
+
+// ---- Message ID allocation ----
+//
+// Menu/list rows show text looked up by an integer message id in the reserved
+// `69_990_000..=69_990_100` region of MSGBND_EVENT_TEXT_FOR_TALK. Every module
+// that registers such a row must get its ids from here so no two modules ever
+// reuse the same id (a real bug before: hardcoded ids collided between the
+// settings menu and roundtable_at_home). Allocate once per logical id/block at
+// init time with [`alloc_message_id`] / [`alloc_message_block`].
+
+/// First (highest) id handed out; we count down so blocks stay within the
+/// reserved region.
+const MSG_ID_BASE: i32 = 69_990_100;
+static NEXT_MSG_ID: AtomicI32 = AtomicI32::new(MSG_ID_BASE);
+
+/// Allocates the next free message id. Each call returns a distinct id.
+pub(crate) fn alloc_message_id() -> i32 {
+    NEXT_MSG_ID.fetch_sub(1, Ordering::Relaxed)
+}
+
+/// Allocates `count` contiguous message ids, returning the lowest one. The
+/// caller uses `base..base+count` (e.g. per-category label ranges).
+pub(crate) fn alloc_message_block(count: usize) -> i32 {
+    let c = count as i32;
+    NEXT_MSG_ID.fetch_sub(c, Ordering::Relaxed) - c + 1
+}
+
 
 // ---- Talk command constants (mirrors elden-x talk_commands.hpp) ----
 
@@ -559,6 +587,19 @@ impl SubMenu {
         let submenu = Box::into_raw(Box::new(SubMenu::new(rows)));
         let self_state = unsafe { std::ptr::addr_of_mut!((*submenu).state) };
         unsafe { SubMenu::link(submenu, return_state, self_state) }
+    }
+
+    /// Like [`link_from_rows_self_return`], but also returns the leaked
+    /// `*mut SubMenu` so the caller can re-target rows (e.g. to wire nested
+    /// submenus via [`SubMenu::set_option_target`]).
+    pub(crate) unsafe fn link_from_rows_self_return_with_ptr(
+        rows: &[(i32, i32, bool, Option<SubMenuAction>)],
+        return_state: *mut State,
+    ) -> (*mut SubMenu, *mut State) {
+        let submenu = Box::into_raw(Box::new(SubMenu::new(rows)));
+        let self_state = unsafe { std::ptr::addr_of_mut!((*submenu).state) };
+        let state = unsafe { SubMenu::link(submenu, return_state, self_state) };
+        (submenu, state)
     }
 
     /// Overrides the transition target of a row that was set during `link`.

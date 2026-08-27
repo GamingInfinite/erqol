@@ -12,10 +12,13 @@
 //! lists with one row per posture (`[X]` marks the current selection), plus
 //! direct toggles for alternative landing and a clear-all action.
 
+use std::sync::LazyLock;
+
 use crate::config;
 use crate::ezstate_menu::{
-    event_arg_int, register_group_patcher, register_message, slice_of, splice_talk_list_option,
-    update_message, ADD_TALK_LIST_DATA, StateGroup, SubMenu, SubMenuAction,
+    alloc_message_block, alloc_message_id, event_arg_int, register_group_patcher, register_message,
+    slice_of, splice_talk_list_option, update_message, ADD_TALK_LIST_DATA, StateGroup, SubMenu,
+    SubMenuAction,
 };
 use crate::log::log;
 
@@ -23,22 +26,25 @@ use crate::log::log;
 const MIRROR_GROUP: i32 = 2147483613;
 
 // ---- Message IDs ----
+//
+// Allocated from the shared allocator (single ids + contiguous picker-row
+// blocks) so they never collide with another module.
 
-const MSG_ALTER_POSTURE: i32 = 69_990_040;
-const MSG_BODY: i32 = 69_990_042;
-const MSG_RIGHT_ARM: i32 = 69_990_043;
-const MSG_LEFT_ARM: i32 = 69_990_044;
-const MSG_MOVEMENT: i32 = 69_990_045;
-const MSG_LANDING: i32 = 69_990_046;
-const MSG_CLEAR_ALL: i32 = 69_990_047;
+static MSG_ALTER_POSTURE: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_BODY: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_RIGHT_ARM: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_LEFT_ARM: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_MOVEMENT: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_LANDING: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_CLEAR_ALL: LazyLock<i32> = LazyLock::new(alloc_message_id);
 const MSG_CANCEL: i32 = 69_990_003;
 
 /// Picker-row message ranges; `[X]` markers are rewritten on every change.
-const MSG_BODY_BASE: i32 = 69_990_100; // +0..=12
-const MSG_RIGHT_ARM_BASE: i32 = 69_990_120; // +0..=11
-const MSG_LEFT_ARM_BASE: i32 = 69_990_140; // +0..=11
-const MSG_MOVE_DEFAULT: i32 = 69_990_160;
-const MSG_MOVE_HEAVY: i32 = 69_990_161;
+static MSG_BODY_BASE: LazyLock<i32> = LazyLock::new(|| alloc_message_block(BODY_LABELS.len()));
+static MSG_RIGHT_ARM_BASE: LazyLock<i32> = LazyLock::new(|| alloc_message_block(ARM_LABELS.len()));
+static MSG_LEFT_ARM_BASE: LazyLock<i32> = LazyLock::new(|| alloc_message_block(ARM_LABELS.len()));
+static MSG_MOVE_DEFAULT: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_MOVE_HEAVY: LazyLock<i32> = LazyLock::new(alloc_message_id);
 
 const OPTION_INDEX: i32 = 2;
 
@@ -108,19 +114,19 @@ fn with_config<T>(f: impl FnOnce(&config::Config) -> T) -> T {
 fn refresh_main_messages() {
     with_config(|cfg| {
         update_message(
-            MSG_BODY,
+            *MSG_BODY,
             &named_label("Body Posture", &BODY_LABELS, cfg.posture_body),
         );
         update_message(
-            MSG_RIGHT_ARM,
+            *MSG_RIGHT_ARM,
             &named_label("Right Arm Posture", &ARM_LABELS, cfg.posture_right_arm),
         );
         update_message(
-            MSG_LEFT_ARM,
+            *MSG_LEFT_ARM,
             &named_label("Left Arm Posture", &ARM_LABELS, cfg.posture_left_arm),
         );
-        update_message(MSG_MOVEMENT, &movement_label(cfg.posture_movement));
-        update_message(MSG_LANDING, &landing_label(cfg.posture_alternative_landing));
+        update_message(*MSG_MOVEMENT, &movement_label(cfg.posture_movement));
+        update_message(*MSG_LANDING, &landing_label(cfg.posture_alternative_landing));
     });
 }
 
@@ -132,7 +138,7 @@ fn refresh_body_messages() {
     let body = with_config(|cfg| cfg.posture_body.rem_euclid(BODY_STYLES));
     for (i, label) in BODY_LABELS.iter().enumerate() {
         update_message(
-            MSG_BODY_BASE + i as i32,
+            *MSG_BODY_BASE + i as i32,
             &marker_label(i as i32 == body, label),
         );
     }
@@ -147,18 +153,18 @@ fn refresh_arm_messages(base: i32, labels: &[&str], value: i32) {
 
 fn refresh_right_arm_messages() {
     let v = with_config(|cfg| cfg.posture_right_arm);
-    refresh_arm_messages(MSG_RIGHT_ARM_BASE, &ARM_LABELS, v);
+    refresh_arm_messages(*MSG_RIGHT_ARM_BASE, &ARM_LABELS, v);
 }
 
 fn refresh_left_arm_messages() {
     let v = with_config(|cfg| cfg.posture_left_arm);
-    refresh_arm_messages(MSG_LEFT_ARM_BASE, &ARM_LABELS, v);
+    refresh_arm_messages(*MSG_LEFT_ARM_BASE, &ARM_LABELS, v);
 }
 
 fn refresh_movement_messages() {
     let heavy = with_config(|cfg| cfg.posture_movement != 0);
-    update_message(MSG_MOVE_DEFAULT, &marker_label(!heavy, MOVEMENT_LABELS[0]));
-    update_message(MSG_MOVE_HEAVY, &marker_label(heavy, MOVEMENT_LABELS[1]));
+    update_message(*MSG_MOVE_DEFAULT, &marker_label(!heavy, MOVEMENT_LABELS[0]));
+    update_message(*MSG_MOVE_HEAVY, &marker_label(heavy, MOVEMENT_LABELS[1]));
 }
 
 fn refresh_all_messages() {
@@ -170,23 +176,23 @@ fn refresh_all_messages() {
 }
 
 fn register_menu_messages() {
-    register_message(MSG_ALTER_POSTURE, "Alter Posture");
-    register_message(MSG_BODY, "Body Posture");
-    register_message(MSG_RIGHT_ARM, "Right Arm Posture");
-    register_message(MSG_LEFT_ARM, "Left Arm Posture");
-    register_message(MSG_MOVEMENT, "Movement Style");
-    register_message(MSG_LANDING, "[OFF] Alternative Landing");
-    register_message(MSG_CLEAR_ALL, "Clear All Postures");
+    register_message(*MSG_ALTER_POSTURE, "Alter Posture");
+    register_message(*MSG_BODY, "Body Posture");
+    register_message(*MSG_RIGHT_ARM, "Right Arm Posture");
+    register_message(*MSG_LEFT_ARM, "Left Arm Posture");
+    register_message(*MSG_MOVEMENT, "Movement Style");
+    register_message(*MSG_LANDING, "[OFF] Alternative Landing");
+    register_message(*MSG_CLEAR_ALL, "Clear All Postures");
     register_message(MSG_CANCEL, "Cancel");
     for (i, label) in BODY_LABELS.iter().enumerate() {
-        register_message(MSG_BODY_BASE + i as i32, &marker_label(false, label));
+        register_message(*MSG_BODY_BASE + i as i32, &marker_label(false, label));
     }
     for (i, label) in ARM_LABELS.iter().enumerate() {
-        register_message(MSG_RIGHT_ARM_BASE + i as i32, &marker_label(false, label));
-        register_message(MSG_LEFT_ARM_BASE + i as i32, &marker_label(false, label));
+        register_message(*MSG_RIGHT_ARM_BASE + i as i32, &marker_label(false, label));
+        register_message(*MSG_LEFT_ARM_BASE + i as i32, &marker_label(false, label));
     }
-    register_message(MSG_MOVE_DEFAULT, &marker_label(true, MOVEMENT_LABELS[0]));
-    register_message(MSG_MOVE_HEAVY, &marker_label(false, MOVEMENT_LABELS[1]));
+    register_message(*MSG_MOVE_DEFAULT, &marker_label(true, MOVEMENT_LABELS[0]));
+    register_message(*MSG_MOVE_HEAVY, &marker_label(false, MOVEMENT_LABELS[1]));
     // Rewrite the registered defaults with the actual current selections.
     refresh_all_messages();
 }
@@ -308,7 +314,7 @@ unsafe fn already_patched(state_group: *mut StateGroup) -> bool {
         for state in slice_of((*state_group).states) {
             for event in slice_of(state.entry_events) {
                 if event.command == ADD_TALK_LIST_DATA
-                    && event_arg_int(event, 1) == MSG_ALTER_POSTURE
+                    && event_arg_int(event, 1) == *MSG_ALTER_POSTURE
                 {
                     return true;
                 }
@@ -338,12 +344,12 @@ unsafe fn patch_mirror(state_group: *mut StateGroup) -> bool {
         // Main Alter Posture page. Category rows start without actions and are
         // re-pointed at their picker states below.
         let main_rows: &[Row] = &[
-            (1, MSG_BODY, false, None),
-            (2, MSG_RIGHT_ARM, false, None),
-            (3, MSG_LEFT_ARM, false, None),
-            (4, MSG_MOVEMENT, false, None),
-            (5, MSG_LANDING, false, Some(toggle_landing)),
-            (6, MSG_CLEAR_ALL, false, Some(clear_all)),
+            (1, *MSG_BODY, false, None),
+            (2, *MSG_RIGHT_ARM, false, None),
+            (3, *MSG_LEFT_ARM, false, None),
+            (4, *MSG_MOVEMENT, false, None),
+            (5, *MSG_LANDING, false, Some(toggle_landing)),
+            (6, *MSG_CLEAR_ALL, false, Some(clear_all)),
             (99, MSG_CANCEL, true, None),
         ];
         let main_menu = Box::into_raw(Box::new(SubMenu::new(main_rows)));
@@ -358,7 +364,7 @@ unsafe fn patch_mirror(state_group: *mut StateGroup) -> bool {
                     // 0, which must fall through to the default Back row
                     // instead of matching an action row.
                     i as i32 + 1,
-                    MSG_BODY_BASE + i as i32,
+                    *MSG_BODY_BASE + i as i32,
                     false,
                     Some(BODY_ACTIONS[i]),
                 )
@@ -371,7 +377,7 @@ unsafe fn patch_mirror(state_group: *mut StateGroup) -> bool {
             .map(|(i, _)| {
                 (
                     i as i32 + 1,
-                    MSG_RIGHT_ARM_BASE + i as i32,
+                    *MSG_RIGHT_ARM_BASE + i as i32,
                     false,
                     Some(RIGHT_ARM_ACTIONS[i]),
                 )
@@ -384,7 +390,7 @@ unsafe fn patch_mirror(state_group: *mut StateGroup) -> bool {
             .map(|(i, _)| {
                 (
                     i as i32 + 1,
-                    MSG_LEFT_ARM_BASE + i as i32,
+                    *MSG_LEFT_ARM_BASE + i as i32,
                     false,
                     Some(LEFT_ARM_ACTIONS[i]),
                 )
@@ -394,11 +400,11 @@ unsafe fn patch_mirror(state_group: *mut StateGroup) -> bool {
         let move_options: Vec<Row> = vec![
             (
                 1,
-                MSG_MOVE_DEFAULT,
+                *MSG_MOVE_DEFAULT,
                 false,
                 Some(set_movement_default),
             ),
-            (2, MSG_MOVE_HEAVY, false, Some(set_movement_heavy)),
+            (2, *MSG_MOVE_HEAVY, false, Some(set_movement_heavy)),
         ];
 
         let body_state = build_picker(&body_options, main_state);
@@ -418,7 +424,7 @@ unsafe fn patch_mirror(state_group: *mut StateGroup) -> bool {
         SubMenu::set_option_target(main_menu, 2, left_state);
         SubMenu::set_option_target(main_menu, 3, move_state);
 
-        if splice_talk_list_option(state_group, OPTION_INDEX, MSG_ALTER_POSTURE, submenu_state) {
+        if splice_talk_list_option(state_group, OPTION_INDEX, *MSG_ALTER_POSTURE, submenu_state) {
             log("postures: spliced Alter Posture into mirror menu");
             true
         } else {
