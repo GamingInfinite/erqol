@@ -147,8 +147,19 @@ unsafe extern "system" fn on_exception(exception_info: *mut EXCEPTION_POINTERS) 
             "VEH:   r12={:#x} r13={:#x} r14={:#x} r15={:#x}",
             ctx.R12, ctx.R13, ctx.R14, ctx.R15
         ));
-        let stack = unsafe { std::slice::from_raw_parts(ctx.Rsp as *const u64, 20) };
-        log::crash_log(&format!("VEH:   stack[0..20] = {}", hex_words(stack)));
+        // The stack may be misaligned or partly unmapped; use VirtualQuery-
+        // guarded reads so this dump can never fault or panic (a panic here
+        // would drown the real fault in a secondary crash).
+        let mut stack = [0u64; 20];
+        let mut n = 0;
+        for (i, w) in stack.iter_mut().enumerate() {
+            match memory::safe_read_u64(ctx.Rsp as usize + i * 8) {
+                Some(v) => *w = v,
+                None => break,
+            }
+            n = i + 1;
+        }
+        log::crash_log(&format!("VEH:   stack[0..{n}] = {}", hex_words(&stack[..n])));
         dump_machine_context(ctx.Rdx as usize);
     }
     EXCEPTION_CONTINUE_SEARCH
@@ -208,8 +219,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 qol::hp_bar_posture::HP_BAR_POSTURE_INSTALLER
                     .call_once(qol::hp_bar_posture::install);
                 qol::dungeon_warp::patch();
-                postures::speffects::SPEFFECTS_INSTALLER
-                    .call_once(postures::speffects::install);
+                postures::speffects::SPEFFECTS_INSTALLER.call_once(postures::speffects::install);
                 postures::effects::tick();
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
                     qol::anti_farm_shop::init();

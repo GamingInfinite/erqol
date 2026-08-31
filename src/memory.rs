@@ -63,6 +63,37 @@ pub unsafe fn patch_bytes(addr: u64, bytes: &[u8]) -> bool {
     true
 }
 
+/// Like [`patch_bytes`], but writes the opcode byte LAST so no observing
+/// thread ever decodes a partially-written branch instruction. The window a
+/// concurrent fetch can tear shrinks to the non-opcode bytes only.
+pub unsafe fn patch_bytes_ordered(addr: u64, bytes: &[u8], opcode_index: usize) -> bool {
+    let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+    if unsafe {
+        VirtualProtect(
+            addr as *const core::ffi::c_void,
+            bytes.len(),
+            PAGE_EXECUTE_READWRITE,
+            &mut old_prot,
+        )
+    }
+    .is_err()
+    {
+        return false;
+    }
+    for (i, &b) in bytes.iter().enumerate() {
+        if i == opcode_index {
+            continue;
+        }
+        unsafe { std::ptr::write_volatile((addr as *mut u8).add(i), b) };
+    }
+    std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    unsafe { std::ptr::write_volatile((addr as *mut u8).add(opcode_index), bytes[opcode_index]) };
+    let _ = unsafe {
+        VirtualProtect(addr as *const core::ffi::c_void, bytes.len(), old_prot, &mut old_prot)
+    };
+    true
+}
+
 // ---- Safe reads (VirtualQuery-guarded) ----
 
 /// Reads a `u64` from `addr` after checking the backing page is committed and

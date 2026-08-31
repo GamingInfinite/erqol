@@ -1,11 +1,12 @@
 use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Mutex, Once};
+use std::sync::{Mutex, Once, OnceLock};
 
 use ilhook::x64::Registers;
 
 use crate::hooks;
 use crate::log::log;
+use crate::memory;
 use crate::scan;
 
 // ---- Message ID allocation ----
@@ -1285,10 +1286,17 @@ fn ezstate_enter_state_detour(regs: *mut Registers, original: usize) -> usize {
     0
 }
 
-fn lookup_entry_detour(regs: *mut Registers, original: usize) -> usize {
-    let bnd = unsafe { (*regs).r8 } as u32;
-    let msg_id = unsafe { (*regs).r9 } as i32;
+/// Address of the relocated LookupEntry prologue (see
+/// [`install_lookup_entry_hook_race_safe`]). Set before the entry patch goes
+/// live so the detour can always forward misses.
+static LOOKUP_TRAMPOLINE: OnceLock<usize> = OnceLock::new();
 
+unsafe extern "system" fn lookup_entry_detour(
+    repo: *const core::ffi::c_void,
+    language: u32,
+    bnd: u32,
+    msg_id: i32,
+) -> *mut u16 {
     let messages = MESSAGES.lock().unwrap_or_else(|e| e.into_inner());
     for msg in messages.iter() {
         if msg.bnd == bnd && msg.id == msg_id {
@@ -1298,7 +1306,7 @@ fn lookup_entry_detour(regs: *mut Registers, original: usize) -> usize {
                     msg.text.len()
                 ));
             }
-            return msg.text.as_ptr() as usize;
+            return msg.text.as_ptr() as *mut u16;
         }
     }
     drop(messages);
@@ -1309,14 +1317,17 @@ fn lookup_entry_detour(regs: *mut Registers, original: usize) -> usize {
         ));
     }
 
-    let original_fn: extern "C" fn(*mut core::ffi::c_void, u32, u32, i32) -> *const u16 =
-        unsafe { std::mem::transmute(original) };
-    original_fn(
-        unsafe { (*regs).rcx } as *mut core::ffi::c_void,
-        unsafe { (*regs).rdx } as u32,
-        bnd,
-        msg_id,
-    ) as usize
+    let trampoline = *LOOKUP_TRAMPOLINE.get().unwrap_or(&0) as *const core::ffi::c_void;
+    if trampoline.is_null() {
+        return ptr::null_mut();
+    }
+    let original_fn: extern "system" fn(
+        *const core::ffi::c_void,
+        u32,
+        u32,
+        i32,
+    ) -> *mut u16 = unsafe { std::mem::transmute(trampoline) };
+    unsafe { original_fn(repo, language, bnd, msg_id) }
 }
 
 // ---- Installer ----
@@ -1326,8 +1337,16 @@ pub(crate) static MENU_INSTALLER: Once = Once::new();
 /// Installs the two hooks that drive every registered feature. Must be called
 /// after the features have registered their patchers and messages.
 pub(crate) fn install() {
-    install_enter_state_hook();
-    install_lookup_entry_hook();
+    if crate::config::with_feature(|cfg| cfg.hook_enter_state) {
+        install_enter_state_hook();
+    } else {
+        log("ezstate_menu: EzState::EnterState hook disabled by config (debug A/B)");
+    }
+    if crate::config::with_feature(|cfg| cfg.hook_lookup_entry) {
+        install_lookup_entry_hook();
+    } else {
+        log("ezstate_menu: MsgRepositoryImp::LookupEntry hook disabled by config (debug A/B)");
+    }
 }
 
 fn install_enter_state_hook() {
@@ -1349,5 +1368,83 @@ fn install_lookup_entry_hook() {
     log(&format!(
         "ezstate_menu: MsgRepositoryImp::LookupEntry at {lookup_entry:#x}"
     ));
-    hooks::install_retn("ezstate_menu: MsgRepositoryImp::LookupEntry", lookup_entry, lookup_entry_detour);
+    if !install_lookup_entry_hook_race_safe(lookup_entry) {
+        log("ezstate_menu: ERROR: LookupEntry hook not installed");
+    }
+}
+
+/// Installs the LookupEntry hook without ilhook. ilhook places its trampoline
+/// on the Rust heap (any distance), forcing a 14-byte `FF 25 <abs8>` entry
+/// patch whose non-atomic write races LookupEntry's parallel loading threads —
+/// deterministically torn when SeamlessCoop shifts startup timing. Instead we
+/// patch with a 5-byte `E9` (opcode written last), a near absolute-jump stub
+/// for the detour, and a relocated prologue trampoline. If another hook
+/// (e.g. coop's) already owns the entry, we chain behind it so its behaviour
+/// is preserved rather than clobbered.
+fn install_lookup_entry_hook_race_safe(entry: u64) -> bool {
+    let orig = unsafe { std::slice::from_raw_parts(entry as *const u8, 15) }.to_vec();
+    // True vanilla prologue, verified with r2 at 0x14266fbd0 in the current
+    // 1.17 exe: `cmp edx,[rcx+0x10]; jae; cmp r8d,[rcx+0x14]; jae;
+    // mov rax,[rcx+8]`.
+    let expected = [
+        0x3b, 0x51, 0x10, 0x73, 0x29, 0x44, 0x3b, 0x41, 0x14, 0x73, 0x23, 0x48, 0x8b, 0x41, 0x08,
+    ];
+
+    // The forwarding target for unknown message ids: an existing hook's
+    // destination (chained) or the relocated game prologue.
+    let forward_target: u64;
+    if orig[..] == expected {
+        // Pristine: the 5-byte window (`cmp edx,[rcx+0x10]; jae` at entry+0..5)
+        // is relocated verbatim, except the short `jae +0x29` becomes an
+        // absolute branch to entry+0x2e (the shared return-null exit); the
+        // trampoline then jumps back at entry+5, the start of the untouched
+        // second arg check (`cmp r8d,[rcx+0x14]`).
+        let jae_target = entry + 0x2e;
+        let jump_back = entry + 5;
+
+        let mut trampoline = Vec::with_capacity(32);
+        trampoline.extend_from_slice(&[0x3b, 0x51, 0x10]); // cmp edx, [rcx+0x10]
+        trampoline.extend_from_slice(&[0x0f, 0x83, 0, 0, 0, 0]); // jae rel32
+        trampoline.extend_from_slice(&[0xff, 0x25, 0, 0, 0, 0]); // jmp [rip+disp32]
+        trampoline.extend_from_slice(&jump_back.to_le_bytes());
+
+        let Some(trampoline_addr) = (unsafe { memory::alloc_executable(entry, 32) }) else {
+            log("ezstate_menu: ERROR: failed to allocate LookupEntry trampoline");
+            return false;
+        };
+        let rel = (jae_target as i64).wrapping_sub((trampoline_addr + 9) as i64) as i32;
+        trampoline[5..9].copy_from_slice(&rel.to_le_bytes());
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                trampoline.as_ptr(),
+                trampoline_addr as *mut u8,
+                trampoline.len(),
+            )
+        };
+        forward_target = trampoline_addr;
+        log(&format!(
+            "ezstate_menu: LookupEntry pristine; trampoline at {trampoline_addr:#x} jae={jae_target:#x} bytes={trampoline:02x?}"
+        ));
+    } else if let Some(existing) = hooks::existing_hook_target(entry, &orig) {
+        // Another hook already owns the entry (coop does this with MinHook).
+        // Chain behind it: forward unknown ids to its target so its behaviour
+        // is preserved.
+        forward_target = existing;
+        log(&format!(
+            "ezstate_menu: LookupEntry already hooked; chaining behind hook target {existing:#x}"
+        ));
+    } else {
+        log(&format!(
+            "ezstate_menu: LookupEntry entry has an incompatible/unrecognised patch ({orig:02x?}); skipping to avoid clobbering another hook"
+        ));
+        return false;
+    }
+
+    hooks::finalize_e9_entry(
+        "ezstate_menu: MsgRepositoryImp::LookupEntry",
+        entry,
+        lookup_entry_detour as usize,
+        forward_target as usize,
+        &LOOKUP_TRAMPOLINE,
+    )
 }

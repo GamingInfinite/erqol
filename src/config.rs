@@ -47,6 +47,8 @@ pub struct Config {
     pub posture_alternative_landing: bool,
     pub hp_bar_tracks: HpBarTracks,
     pub spirit_summon_everywhere: bool,
+    pub hook_enter_state: bool,
+    pub hook_lookup_entry: bool,
 }
 
 impl Default for Config {
@@ -69,6 +71,8 @@ impl Default for Config {
             posture_alternative_landing: false,
             hp_bar_tracks: HpBarTracks::Hp,
             spirit_summon_everywhere: true,
+            hook_enter_state: true,
+            hook_lookup_entry: true,
         }
     }
 }
@@ -144,12 +148,14 @@ pub fn load() {
             "posture_alternative_landing" => cfg.posture_alternative_landing = parse_bool(value),
             "hp_bar_tracks" => cfg.hp_bar_tracks = parse_hp_bar_tracks(value),
             "spirit_summon_everywhere" => cfg.spirit_summon_everywhere = parse_bool(value),
+            "hook_enter_state" => cfg.hook_enter_state = parse_bool(value),
+            "hook_lookup_entry" => cfg.hook_lookup_entry = parse_bool(value),
             _ => {}
         }
     }
 
     log(format!(
-         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={}",
+         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={} hes={} hle={}",
         path.display(),
         cfg.dungeon_warp,
         cfg.map_in_combat,
@@ -167,6 +173,8 @@ pub fn load() {
          cfg.posture_movement,
          cfg.posture_alternative_landing,
          cfg.spirit_summon_everywhere,
+         cfg.hook_enter_state,
+         cfg.hook_lookup_entry,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -184,6 +192,9 @@ pub fn save() {
          #   auto_pickup, skip_flask_confirm, anti_farm_shop,\n\
          #   consume_all_runes, merchant_bell_bearing, roundtable_at_home,\n\
          #   postures_enabled\n\
+         # A/B debug toggles for ezstate_menu (both default true):\n\
+         #   hook_enter_state  -- EzState::EnterState entry hook\n\
+         #   hook_lookup_entry -- MsgRepositoryImp::LookupEntry entry hook\n\
          \n\
          dungeon_warp = {dungeon_warp}\n\
          map_in_combat = {map_in_combat}\n\
@@ -200,8 +211,10 @@ pub fn save() {
          posture_left_arm = {posture_left_arm}\n\
          posture_movement = {posture_movement}\n\
           posture_alternative_landing = {posture_alternative_landing}\n\
-          hp_bar_tracks = {hp_bar_tracks}\n\
-          spirit_summon_everywhere = {spirit_summon_everywhere}\n",
+hp_bar_tracks = {hp_bar_tracks}\n\
+           spirit_summon_everywhere = {spirit_summon_everywhere}\n\
+           hook_enter_state = {hook_enter_state}\n\
+           hook_lookup_entry = {hook_lookup_entry}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -219,6 +232,8 @@ pub fn save() {
         posture_alternative_landing = cfg.posture_alternative_landing,
         hp_bar_tracks = cfg.hp_bar_tracks.as_str(),
         spirit_summon_everywhere = cfg.spirit_summon_everywhere,
+        hook_enter_state = cfg.hook_enter_state,
+        hook_lookup_entry = cfg.hook_lookup_entry,
     );
     drop(cfg);
 
