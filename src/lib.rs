@@ -218,6 +218,9 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 qol::heavy_door::HEAVY_DOOR_INSTALLER.call_once(qol::heavy_door::install);
                 qol::hp_bar_posture::HP_BAR_POSTURE_INSTALLER
                     .call_once(qol::hp_bar_posture::install);
+                if config::with_feature(|c| c.map_icons) {
+                    qol::map_icons::MAP_ICONS_INSTALLER.call_once(qol::map_icons::install);
+                }
                 qol::dungeon_warp::patch();
                 postures::speffects::SPEFFECTS_INSTALLER.call_once(postures::speffects::install);
                 postures::effects::tick();

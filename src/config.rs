@@ -49,6 +49,7 @@ pub struct Config {
     pub spirit_summon_everywhere: bool,
     pub hook_enter_state: bool,
     pub hook_lookup_entry: bool,
+    pub map_icons: bool,
 }
 
 impl Default for Config {
@@ -73,6 +74,7 @@ impl Default for Config {
             spirit_summon_everywhere: true,
             hook_enter_state: true,
             hook_lookup_entry: true,
+            map_icons: true,
         }
     }
 }
@@ -150,12 +152,13 @@ pub fn load() {
             "spirit_summon_everywhere" => cfg.spirit_summon_everywhere = parse_bool(value),
             "hook_enter_state" => cfg.hook_enter_state = parse_bool(value),
             "hook_lookup_entry" => cfg.hook_lookup_entry = parse_bool(value),
+            "map_icons" => cfg.map_icons = parse_bool(value),
             _ => {}
         }
     }
 
     log(format!(
-         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={} hes={} hle={}",
+         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={} hes={} hle={} mi={}",
         path.display(),
         cfg.dungeon_warp,
         cfg.map_in_combat,
@@ -175,6 +178,7 @@ pub fn load() {
          cfg.spirit_summon_everywhere,
          cfg.hook_enter_state,
          cfg.hook_lookup_entry,
+         cfg.map_icons,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -214,7 +218,8 @@ pub fn save() {
 hp_bar_tracks = {hp_bar_tracks}\n\
            spirit_summon_everywhere = {spirit_summon_everywhere}\n\
            hook_enter_state = {hook_enter_state}\n\
-           hook_lookup_entry = {hook_lookup_entry}\n",
+           hook_lookup_entry = {hook_lookup_entry}\n\
+           map_icons = {map_icons}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -234,6 +239,7 @@ hp_bar_tracks = {hp_bar_tracks}\n\
         spirit_summon_everywhere = cfg.spirit_summon_everywhere,
         hook_enter_state = cfg.hook_enter_state,
         hook_lookup_entry = cfg.hook_lookup_entry,
+        map_icons = cfg.map_icons,
     );
     drop(cfg);
 
