@@ -2,9 +2,7 @@
 
 use std::sync::OnceLock;
 
-use ilhook::x64::{
-    hook_closure_jmp_back, hook_closure_retn, CallbackOption, HookFlags, Registers,
-};
+use ilhook::x64::{CallbackOption, HookFlags, Registers, hook_closure_jmp_back, hook_closure_retn};
 
 use crate::log::log;
 use crate::memory;
@@ -70,6 +68,77 @@ pub fn existing_hook_target(entry: u64, bytes: &[u8]) -> Option<u64> {
         }
         _ => None,
     }
+}
+
+/// Relocates the first `copy_len` bytes of a pristine function entry into a
+/// near executable trampoline that then jumps back to `entry + copy_len`. The
+/// relocated window must end on an instruction boundary and contain no
+/// branches or RIP-relative operands (the bytes are copied verbatim). Returns
+/// the trampoline address, which callers pass on as the forward target.
+pub fn relocate_prologue(name: &str, entry: u64, orig: &[u8], copy_len: usize) -> Option<u64> {
+    let jump_back = entry + copy_len as u64;
+    let mut trampoline = Vec::with_capacity(copy_len + 14);
+    trampoline.extend_from_slice(&orig[..copy_len]);
+    trampoline.extend_from_slice(&[0xff, 0x25, 0, 0, 0, 0]);
+    trampoline.extend_from_slice(&jump_back.to_le_bytes());
+    let Some(addr) = (unsafe { memory::alloc_executable(entry, trampoline.len()) }) else {
+        log(format!("{name}: ERROR: failed to allocate trampoline"));
+        return None;
+    };
+    unsafe {
+        std::ptr::copy_nonoverlapping(trampoline.as_ptr(), addr as *mut u8, trampoline.len());
+    }
+    log(format!(
+        "{name}: pristine; trampoline at {addr:#x} bytes={trampoline:02x?}"
+    ));
+    Some(addr)
+}
+
+/// Installs an E9 entry-patch hook race-safely. This is the standard installer
+/// for hooks that must tolerate concurrent fetchers and other hooking
+/// libraries (SeamlessCoop, MinHook users, ...):
+///
+/// * If the live entry bytes match `entry_expected` (pristine), `build_trampoline`
+///   is called with the live bytes and must return the address of a relocated
+///   prologue that resumes the original function (see [`relocate_prologue`]).
+/// * If another hook already owns the entry, we chain behind its destination so
+///   its behaviour is preserved.
+/// * Otherwise the entry carries an unrecognised patch and we refuse to clobber
+///   it.
+///
+/// The chosen forward target is stored in `forward` and the 5-byte `E9` patch
+/// is written via [`finalize_e9_entry`].
+pub fn install_e9_entry_race_safe(
+    name: &str,
+    entry: u64,
+    entry_expected: &[u8],
+    build_trampoline: impl FnOnce(&[u8]) -> Option<u64>,
+    detour: usize,
+    forward: &OnceLock<usize>,
+) -> bool {
+    // Read at least 6 bytes so `existing_hook_target` can decode an `FF 25`
+    // indirect jump even when the expected prologue is only 5 bytes long.
+    let read_len = entry_expected.len().max(6);
+    let orig = unsafe { std::slice::from_raw_parts(entry as *const u8, read_len) }.to_vec();
+
+    let forward_target = if orig[..entry_expected.len()] == *entry_expected {
+        let Some(addr) = build_trampoline(&orig) else {
+            return false;
+        };
+        addr
+    } else if let Some(existing) = existing_hook_target(entry, &orig) {
+        log(format!(
+            "{name}: already hooked; chaining behind hook target {existing:#x}"
+        ));
+        existing
+    } else {
+        log(format!(
+            "{name}: entry has an incompatible/unrecognised patch ({orig:02x?}); skipping to avoid clobbering another hook"
+        ));
+        return false;
+    };
+
+    finalize_e9_entry(name, entry, detour, forward_target as usize, forward)
 }
 
 /// Race-safe entry-patch finalisation shared by every hook that must tolerate

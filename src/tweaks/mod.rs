@@ -2,4 +2,4 @@
 //! `qol` (which is mostly navigation / UI conveniences). Currently home to
 //! spirit-summon behaviour tweaks.
 
-pub mod spirit_summon;
+// pub mod spirit_summon;

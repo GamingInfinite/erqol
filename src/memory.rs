@@ -3,8 +3,8 @@
 #![allow(dead_code)]
 
 use windows::Win32::System::Memory::{
-    VirtualAlloc, VirtualProtect, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT,
-    MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS,
+    MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READWRITE, PAGE_NOACCESS,
+    PAGE_PROTECTION_FLAGS, VirtualAlloc, VirtualProtect, VirtualQuery,
 };
 
 // ---- Volatile reads ----
@@ -58,7 +58,12 @@ pub unsafe fn patch_bytes(addr: u64, bytes: &[u8]) -> bool {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as *mut u8, bytes.len());
     }
     let _ = unsafe {
-        VirtualProtect(addr as *const core::ffi::c_void, bytes.len(), old_prot, &mut old_prot)
+        VirtualProtect(
+            addr as *const core::ffi::c_void,
+            bytes.len(),
+            old_prot,
+            &mut old_prot,
+        )
     };
     true
 }
@@ -89,7 +94,12 @@ pub unsafe fn patch_bytes_ordered(addr: u64, bytes: &[u8], opcode_index: usize) 
     std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
     unsafe { std::ptr::write_volatile((addr as *mut u8).add(opcode_index), bytes[opcode_index]) };
     let _ = unsafe {
-        VirtualProtect(addr as *const core::ffi::c_void, bytes.len(), old_prot, &mut old_prot)
+        VirtualProtect(
+            addr as *const core::ffi::c_void,
+            bytes.len(),
+            old_prot,
+            &mut old_prot,
+        )
     };
     true
 }

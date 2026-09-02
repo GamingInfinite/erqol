@@ -16,7 +16,6 @@ use std::sync::{Once, OnceLock};
 
 use crate::hooks;
 use crate::log::log;
-use crate::memory;
 use crate::postures::speffect_ids::SPEFFECT_IDS;
 use crate::scan;
 
@@ -108,7 +107,7 @@ unsafe extern "system" fn get_sp_effect_param_detour(
     if let Some(index) = find_index(id as i32) {
         // The original fills param_id + data_version (and row=null, since our
         // ids don't exist in vanilla regulations); we then swap in our row.
-        unsafe { original_fn(result, id) };
+        original_fn(result, id);
         unsafe { (*result).row = &rows()[index] };
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log(format!(
@@ -118,7 +117,7 @@ unsafe extern "system" fn get_sp_effect_param_detour(
         return result;
     }
 
-    unsafe { original_fn(result, id) }
+    original_fn(result, id)
 }
 
 /// Locates the getter even when another hooking library already modified the
@@ -137,52 +136,25 @@ fn locate_get_sp_effect_param() -> Option<u64> {
 }
 
 fn install_gsp_race_safe(entry: u64) -> bool {
-    let orig = unsafe { std::slice::from_raw_parts(entry as *const u8, 15) }.to_vec();
-
-    // The forwarding target for unknown ids: an existing hook's destination
-    // (chained) or the relocated game prologue.
-    let forward_target: u64;
-    if orig[..] == GSP_ENTRY_EXPECTED {
-        // Pristine: relocate the prologue `push r14; sub rsp,0x40`. The `sub`
-        // spans bytes 2..5, so the relocation window must end on the instruction
-        // boundary at entry+6 (start of `mov qword [rsp+0x20],-2`), not entry+5
-        // (which would cut through the `sub`'s immediate). No branches live in
-        // the window, so the copy is verbatim.
-        let jump_back = entry + 6;
-        let mut trampoline = Vec::with_capacity(24);
-        trampoline.extend_from_slice(&orig[0..6]);
-        trampoline.extend_from_slice(&[0xff, 0x25, 0, 0, 0, 0]);
-        trampoline.extend_from_slice(&jump_back.to_le_bytes());
-        let Some(addr) = (unsafe { memory::alloc_executable(entry, trampoline.len()) }) else {
-            log("postures_speffects: ERROR: failed to allocate GetSpEffectParam trampoline");
-            return false;
-        };
-        unsafe {
-            std::ptr::copy_nonoverlapping(trampoline.as_ptr(), addr as *mut u8, trampoline.len());
-        }
-        forward_target = addr;
-        log(&format!(
-            "postures_speffects: GetSpEffectParam pristine; trampoline at {addr:#x} bytes={trampoline:02x?}"
-        ));
-    } else if let Some(existing) = hooks::existing_hook_target(entry, &orig) {
-        // Another hook already owns the entry (coop does this with MinHook).
-        // Chain behind it so its behaviour is preserved.
-        forward_target = existing;
-        log(&format!(
-            "postures_speffects: GetSpEffectParam already hooked; chaining behind hook target {existing:#x}"
-        ));
-    } else {
-        log(&format!(
-            "postures_speffects: GetSpEffectParam entry has an incompatible/unrecognised patch ({orig:02x?}); skipping to avoid clobbering another hook"
-        ));
-        return false;
-    }
-
-    hooks::finalize_e9_entry(
+    // Pristine: relocate the prologue `push r14; sub rsp,0x40`. The `sub`
+    // spans bytes 2..5, so the relocation window must end on the instruction
+    // boundary at entry+6 (start of `mov qword [rsp+0x20],-2`), not entry+5
+    // (which would cut through the `sub`'s immediate). No branches live in
+    // the window, so the copy is verbatim.
+    const COPY_LEN: usize = 6;
+    hooks::install_e9_entry_race_safe(
         "postures_speffects: GetSpEffectParam",
         entry,
-        get_sp_effect_param_detour as usize,
-        forward_target as usize,
+        &GSP_ENTRY_EXPECTED,
+        |orig| {
+            hooks::relocate_prologue(
+                "postures_speffects: GetSpEffectParam",
+                entry,
+                orig,
+                COPY_LEN,
+            )
+        },
+        get_sp_effect_param_detour as *const () as usize,
         &GSP_TRAMPOLINE,
     )
 }
