@@ -9,6 +9,7 @@ use windows::Win32::System::Diagnostics::Debug::{
 };
 
 mod config;
+mod debug;
 mod ezstate_menu;
 mod grace_settings;
 mod hooks;
@@ -219,8 +220,9 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 qol::hp_bar_posture::HP_BAR_POSTURE_INSTALLER
                     .call_once(qol::hp_bar_posture::install);
                 if config::with_feature(|c| c.map_icons) {
-                    qol::map_icons::MAP_ICONS_INSTALLER.call_once(qol::map_icons::install);
+                    tweaks::map_icons::MAP_ICONS_INSTALLER.call_once(tweaks::map_icons::install);
                 }
+                debug::player_position::tick();
                 qol::dungeon_warp::patch();
                 postures::speffects::SPEFFECTS_INSTALLER.call_once(postures::speffects::install);
                 postures::effects::tick();

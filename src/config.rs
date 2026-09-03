@@ -50,6 +50,8 @@ pub struct Config {
     pub hook_enter_state: bool,
     pub hook_lookup_entry: bool,
     pub map_icons: bool,
+    pub map_icon_points: bool,
+    pub map_icon_point_label: String,
 }
 
 impl Default for Config {
@@ -75,6 +77,8 @@ impl Default for Config {
             hook_enter_state: true,
             hook_lookup_entry: true,
             map_icons: true,
+            map_icon_points: false,
+            map_icon_point_label: "Point".to_string(),
         }
     }
 }
@@ -153,12 +157,14 @@ pub fn load() {
             "hook_enter_state" => cfg.hook_enter_state = parse_bool(value),
             "hook_lookup_entry" => cfg.hook_lookup_entry = parse_bool(value),
             "map_icons" => cfg.map_icons = parse_bool(value),
+            "map_icon_points" => cfg.map_icon_points = parse_bool(value),
+            "map_icon_point_label" => cfg.map_icon_point_label = value.trim().to_string(),
             _ => {}
         }
     }
 
     log(format!(
-         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={} hes={} hle={} mi={}",
+         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={} hes={} hle={} mi={} mip={}",
         path.display(),
         cfg.dungeon_warp,
         cfg.map_in_combat,
@@ -179,6 +185,7 @@ pub fn load() {
          cfg.hook_enter_state,
          cfg.hook_lookup_entry,
          cfg.map_icons,
+         cfg.map_icon_points,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -189,6 +196,7 @@ pub fn save() {
         return;
     };
     let cfg = config().lock().unwrap_or_else(|e| e.into_inner());
+    let label = cfg.map_icon_point_label.clone();
     let content = format!(
         "# ERQoL Settings\n\
          # Edit values and restart the game for changes to take effect.\n\
@@ -219,7 +227,11 @@ hp_bar_tracks = {hp_bar_tracks}\n\
            spirit_summon_everywhere = {spirit_summon_everywhere}\n\
            hook_enter_state = {hook_enter_state}\n\
            hook_lookup_entry = {hook_lookup_entry}\n\
-           map_icons = {map_icons}\n",
+           map_icons = {map_icons}\n\
+           # Debug: log current player map position to erqol_points.json when
+           # the hotkey (F9) is pressed. Requires map_icons = true.
+           map_icon_points = {map_icon_points}\n\
+           map_icon_point_label = {label:?}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -240,6 +252,7 @@ hp_bar_tracks = {hp_bar_tracks}\n\
         hook_enter_state = cfg.hook_enter_state,
         hook_lookup_entry = cfg.hook_lookup_entry,
         map_icons = cfg.map_icons,
+        map_icon_points = cfg.map_icon_points,
     );
     drop(cfg);
 

@@ -1,0 +1,37 @@
+[
+  {
+    "note": "Golden Seed",
+    "area_no": 60,
+    "grid_x_no": 41,
+    "grid_z_no": 38,
+    "pos": [44.74296, 179.22809, -78.66958]
+  },
+  {
+    "note": "Sacred Tear",
+    "area_no": 60,
+    "grid_x_no": 46,
+    "grid_z_no": 38,
+    "pos": [-91.67031, 3.3210611, 90.42685]
+  },
+  {
+    "note": "Whetstone Knife",
+    "area_no": 60,
+    "grid_x_no": 42,
+    "grid_z_no": 37,
+    "pos": [73.98159, 84.01499, 51.43994]
+  },
+  {
+    "note": "Golden Seed",
+    "area_no": 60,
+    "grid_x_no": 46,
+    "grid_z_no": 36,
+    "pos": [-63.200657, 45.722, -49.404243]
+  },
+  {
+    "note": "Dectus Half (Left)",
+    "area_no": 60,
+    "grid_x_no": 46,
+    "grid_z_no": 36,
+    "pos": [-4.877186, 91.07201, -36.209023]
+  }
+]

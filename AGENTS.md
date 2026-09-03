@@ -23,3 +23,10 @@
 - When testing with **Elden Ring Reforged**, copy the DLL to Reforged's own
   third-party DLL folder instead:
   `/mnt/BARGE/FromSoftModding/ERRv2.2.9.6/dll/offline/`
+
+# Testing
+
+- The user is **not** testing with Elden Ring Reforged and will never reference
+  Reforged unless explicitly stated. Default to deploying to the vanilla
+  `/mnt/BARGE/FromSoftModding/ERQoL/` folder; only touch the Reforged folder
+  when the user explicitly says Reforged.

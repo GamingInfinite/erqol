@@ -29,6 +29,8 @@
 
 use std::sync::{Once, OnceLock};
 
+use serde::Deserialize;
+
 use crate::hooks;
 use crate::log::log;
 use crate::memory;
@@ -61,12 +63,6 @@ const GETTER_PATTERN: &str = "57 48 83 EC 40 48 C7 44 24 20 FE FF FF FF 48 89 5C
      4C 8D 05 ? ? ? ? BA B4 00 00 00 48 8D 0D ? ? ? ? E8 ? ? ? ? \
      48 8B 0D ? ? ? ? 45 33 C0 41 8D 50 57";
 
-/// One opaque param row; contents are copied verbatim from the in-memory
-/// vanilla rows (including our appended clones) so field layout matches
-/// whatever the game expects.
-#[repr(C, align(16))]
-struct WmpRow([u8; ROW_SIZE as usize]);
-
 /// Layout of the WorldMapPoint param block that `group.row_buffer` points at
 /// (all offsets relative to the block base, i.e. to `row_buffer`):
 ///   [-0x10] u32 aligned data size  -> id table lives at base + align16(this)
@@ -79,8 +75,22 @@ const HDR_OFF_DATA_SIZE: isize = -0x10; // u32
 const HDR_OFF_COUNT: isize = -0x0c; // u32
 const HDR_OFF_COUNT_WORD: isize = 0x0a; // u16
 
-/// Number of custom rows = number of custom points.
-const CUSTOM_ROW_COUNT: usize = CUSTOM_POINTS.len();
+/// A custom map icon to append. The row is cloned from the Church of Elleh
+/// template (below) so it carries a real grace's gating fields, then its
+/// location/icon fields are overridden by [`apply_point`].
+#[derive(Clone)]
+struct CustomPoint {
+    /// World cell the icon lives in; must map to a known area (the visibility
+    /// gate converts `area_no/grid_x/grid_z` + position to a world area).
+    area_no: u8,
+    grid_x_no: u8,
+    grid_z_no: u8,
+    /// World position `[x, y, z]` used to place the marker in that cell.
+    pos: [f32; 3],
+    /// Mod-allocated PlaceName message id backing the label lookup.
+    msg_id: i32,
+}
+
 /// Byte offsets (WORLD_MAP_POINT_PARAM_ST, DataVersion 6) of the fields we set
 /// for a custom icon.
 const OFF_AREA_NO: usize = 0x20;
@@ -92,38 +102,84 @@ const OFF_POS_Z: usize = 0x2c;
 const OFF_ICON_ID: usize = 0x0c; // u16
 const OFF_FLAGS: usize = 0x10; // isEnableNoText = bit 2
 const OFF_TEXT_ID1: usize = 0x30; // s32, -1 = render icon without a label
-/// Site of Grace icon (verified: real graces use iconId 3, not 83; 83 is the
-/// "Guidance of Grace" golden-streak marker).
-const SITE_OF_GRACE_ICON_ID: u16 = 3;
+/// `text_type1` (u8). 0 routes the label through the PlaceName message path.
+const OFF_TEXT_TYPE1: usize = 0x90;
+/// PlaceName message bnd id. The map marker's label (text_type 0, text_id1)
+/// resolves via `MsgRepositoryImp::LookupEntry(repo, lang, 0x13 PlaceName, id)`.
+const MSGBND_PLACE_NAME: u32 = 0x13;
+/// Icon id used for every custom point. Turns out 3 is a church marker (not the
+/// Site of Grace icon the original name assumed); kept deliberately because it
+/// stands out nicely next to real grace markers.
+const CUSTOM_ICON_ID: u16 = 3;
 /// Vanilla id of the real Church of Elleh grace, used as the custom-row
-/// template (carries valid eventFlagId/clearedEventFlagId/icon fields).
+/// template. Cloning it carries valid `eventFlagId`/`clearedEventFlagId`/icon
+/// fields, including the `eventFlagId` that gates whether the icon shows at all
+/// (set true in nearly all saves), so custom icons render regardless.
 const TEMPLATE_CHURCH_OF_ELLEH: u32 = 61_423_600;
 
-/// A custom map icon to append. The PoC places a grace icon (its row cloned
-/// from a template, fields overridden below) next to the real Church of Elleh.
-struct CustomPoint {
-    /// World cell the icon lives in; must map to a known area (the visibility
-    /// gate converts `area_no/grid_x/grid_z` + position to a world area).
+/// On-disk / embedded JSON representation of a custom point. Kept human
+/// readable and matching the field names the debug recorder emits so a recorded
+/// point can be pasted straight into `map_icons_points.json`.
+#[derive(Deserialize)]
+struct JsonPoint {
+    #[serde(default)]
+    note: String,
     area_no: u8,
     grid_x_no: u8,
     grid_z_no: u8,
-    /// World position. Positions are copied from the real Church of Elleh grace
-    /// (`id 61423600`) and nudged so the new icon sits beside it.
     pos: [f32; 3],
 }
 
-/// The PoC custom-icon list. The row is cloned from the real Church of Elleh
-/// grace (`id 61423600`) so it carries a real grace's gating fields, then its
-/// location is overridden. `pos` is `[x, y, z]`, offset from the source by the
-/// given delta: the vanilla grace sits at (-40.734, 90.971, 79.338), we nudge
-/// it west ~6 units so the new marker renders visibly beside it instead of
-/// piling on the exact same spot.
-const CUSTOM_POINTS: &[CustomPoint] = &[CustomPoint {
-    area_no: 60,
-    grid_x_no: 42,
-    grid_z_no: 36,
-    pos: [0.0, 90.971, 79.338],
-}];
+/// The base set of custom map icons, baked into the DLL from
+/// `map_icons_points.json` (next to this file). This is the source of truth for
+/// the icons shipped with the mod — it is embedded at compile time, not read
+/// from disk at runtime. The debug `erqol_points.json` recorder is separate and
+/// clears itself each launch.
+const EMBEDDED_POINTS_JSON: &str = include_str!("map_icons_points.json");
+
+/// Runtime-resolved custom point list. Parsed once from the embedded JSON on
+/// the first `build_block` call, then cached. Empty if the embedded JSON fails
+/// to parse (a build-time bug — should always have at least the baked set).
+static CUSTOM_POINTS: OnceLock<Vec<CustomPoint>> = OnceLock::new();
+
+/// Number of custom rows = number of custom points. Computed from the
+/// runtime-resolved list so the row/offset/id-table sizes always match.
+fn custom_row_count() -> usize {
+    custom_points().len()
+}
+
+/// Returns the runtime-resolved custom point list, parsing the embedded JSON
+/// on first use.
+fn custom_points() -> &'static [CustomPoint] {
+    CUSTOM_POINTS.get_or_init(|| {
+        let points: Vec<JsonPoint> = serde_json::from_str(EMBEDDED_POINTS_JSON)
+            .unwrap_or_else(|e| {
+                log(&format!(
+                    "map_icons: ERROR parsing embedded map_icons_points.json: {e}"
+                ));
+                Vec::new()
+            });
+        let custom: Vec<CustomPoint> = points
+            .into_iter()
+            .map(|p| {
+                let msg_id = crate::ezstate_menu::alloc_message_id();
+                crate::ezstate_menu::register_message_in_bnd(MSGBND_PLACE_NAME, msg_id, &p.note);
+                CustomPoint {
+                    area_no: p.area_no,
+                    grid_x_no: p.grid_x_no,
+                    grid_z_no: p.grid_z_no,
+                    pos: p.pos,
+                    msg_id,
+                }
+            })
+            .collect();
+        log(&format!(
+            "map_icons: loaded {} embedded custom point(s)",
+            custom.len()
+        ));
+        custom
+    })
+}
 
 /// The built combination of the vanilla structured block plus our appended
 /// custom rows. `base` is the base of a mod-owned, contiguously-allocated
@@ -279,7 +335,7 @@ fn build_block(base: *const u8) -> Option<BuiltBlock> {
         return None;
     }
 
-    let new_count = vanilla_count + CUSTOM_ROW_COUNT;
+    let new_count = vanilla_count + custom_row_count();
     let table_bytes = new_count * mode.stride;
     let rows_bytes = new_count * (ROW_SIZE as usize);
     let control = mode.table_off;
@@ -326,12 +382,18 @@ fn build_block(base: *const u8) -> Option<BuiltBlock> {
             std::ptr::copy_nonoverlapping(row_src, row_dst, ROW_SIZE as usize);
         }
     }
-    for i in 0..CUSTOM_ROW_COUNT {
+    for i in 0..custom_row_count() {
         let row_dst = unsafe { nb.add(rows_start + (vanilla_count + i) * (ROW_SIZE as usize)) };
         let row_src = unsafe { base.add(read_off(base, &mode, template_idx)) };
         unsafe { std::ptr::copy_nonoverlapping(row_src, row_dst, ROW_SIZE as usize) };
-        let pt = &CUSTOM_POINTS[i];
-        unsafe { apply_point(&mut *(row_dst as *mut WmpRow), pt) };
+        let pt = &custom_points()[i];
+        // NOTE: written via a byte slice, not a `&mut WmpRow` — custom rows
+        // start at `rows_start = control + table_bytes`, whose alignment is not
+        // guaranteed 16-byte (it flips with the parity of the row count), so an
+        // aligned `WmpRow` deref would misalign-panic. Byte-level writes need no
+        // alignment.
+        let row_bytes = unsafe { std::slice::from_raw_parts_mut(row_dst, ROW_SIZE as usize) };
+        apply_point(row_bytes, pt);
     }
     // 4. Write the offset table entries (relative to the new base).
     for i in 0..new_count {
@@ -365,7 +427,7 @@ fn build_block(base: *const u8) -> Option<BuiltBlock> {
     log(&format!(
         "map_icons: custom template row index {template_idx} (id {TEMPLATE_CHURCH_OF_ELLEH}), max vanilla id {max_vanilla_id}"
     ));
-    for i in 0..CUSTOM_ROW_COUNT {
+    for i in 0..custom_row_count() {
         let id = max_vanilla_id.wrapping_add(1 + i as u32);
         let row_index = (vanilla_count + i) as u32;
         buf.extend_from_slice(&id.to_le_bytes());
@@ -386,39 +448,46 @@ fn build_block(base: *const u8) -> Option<BuiltBlock> {
     };
     std::mem::forget(buf);
     let _ = ROWS.set(block);
+    let custom_count = custom_row_count();
     log(&format!(
         "map_icons: built block base={nb:p} vanilla_count={vanilla_count} \
          new_count={new_count} data_size={new_data_size_al:#x} \
-         custom={CUSTOM_ROW_COUNT}"
+         custom={custom_count}"
     ));
     Some(block)
 }
 
-fn apply_point(row: &mut WmpRow, pt: &CustomPoint) {
-    row.0[OFF_AREA_NO] = pt.area_no;
-    row.0[OFF_GRID_X] = pt.grid_x_no;
-    row.0[OFF_GRID_Z] = pt.grid_z_no;
+fn apply_point(row: &mut [u8], pt: &CustomPoint) {
+    row[OFF_AREA_NO] = pt.area_no;
+    row[OFF_GRID_X] = pt.grid_x_no;
+    row[OFF_GRID_Z] = pt.grid_z_no;
     write_f32(row, OFF_POS_X, pt.pos[0]);
     write_f32(row, OFF_POS_Y, pt.pos[1]);
     write_f32(row, OFF_POS_Z, pt.pos[2]);
-    // Force the Site of Grace icon (3) with no text label, using the same
-    // icon-only pattern vanilla guidance rows use: isEnableNoText (bit 2) set
-    // + textId1 = -1.
-    write_u16(row, OFF_ICON_ID, SITE_OF_GRACE_ICON_ID);
-    row.0[OFF_FLAGS] |= 1 << 2;
-    write_i32(row, OFF_TEXT_ID1, -1);
+    // Force the church icon (3) with no text label, using the same icon-only
+    // pattern a marker row uses: isEnableNoText (bit 2) set + textId1 = -1.
+    // The row's `eventFlagId` (the flag that gates whether the icon shows at
+    // all) is preserved untouched from the template clone, so these render
+    // under the same flag gating as the test icon.
+    write_u16(row, OFF_ICON_ID, CUSTOM_ICON_ID);
+    row[OFF_FLAGS] |= 1 << 2;
+    // Route the label through the PlaceName message path (text_type 0) and
+    // point it at our registered note text. `isEnableNoText` (bit 2) is kept ON;
+    // verified it does NOT prevent the label from rendering, so it stays.
+    row[OFF_TEXT_TYPE1] = 0;
+    write_i32(row, OFF_TEXT_ID1, pt.msg_id);
 }
 
-fn write_f32(row: &mut WmpRow, off: usize, val: f32) {
-    row.0[off..off + 4].copy_from_slice(&val.to_le_bytes());
+fn write_f32(row: &mut [u8], off: usize, val: f32) {
+    row[off..off + 4].copy_from_slice(&val.to_le_bytes());
 }
 
-fn write_i32(row: &mut WmpRow, off: usize, val: i32) {
-    row.0[off..off + 4].copy_from_slice(&val.to_le_bytes());
+fn write_i32(row: &mut [u8], off: usize, val: i32) {
+    row[off..off + 4].copy_from_slice(&val.to_le_bytes());
 }
 
-fn write_u16(row: &mut WmpRow, off: usize, val: u16) {
-    row.0[off..off + 2].copy_from_slice(&val.to_le_bytes());
+fn write_u16(row: &mut [u8], off: usize, val: u16) {
+    row[off..off + 2].copy_from_slice(&val.to_le_bytes());
 }
 
 /// Look up the vanilla row index for `want` in the id table (entries

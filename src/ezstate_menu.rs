@@ -65,6 +65,10 @@ const OPEN_GENERIC_DIALOG: Command = Command {
     id: 2147483647,
 };
 const MSGBND_EVENT_TEXT_FOR_TALK: u32 = 33;
+/// PlaceName message bnd (0x13): the world-map marker label path (text_type 0,
+/// textId1) resolves through `LookupEntry(repo, lang, 0x13, id)`. Custom map
+/// icon labels are registered here.
+const MSGBND_PLACE_NAME: u32 = 0x13;
 
 const MSG_SORT_CHEST: i32 = 15000395;
 
@@ -1304,6 +1308,12 @@ unsafe extern "system" fn lookup_entry_detour(
             if bnd == MSGBND_EVENT_TEXT_FOR_TALK && (69_990_000..=69_990_100).contains(&msg_id) {
                 log(&format!(
                     "ezstate_menu: LookupEntry served bnd={bnd} msg_id={msg_id} text_len={}",
+                    msg.text.len()
+                ));
+            }
+            if bnd == MSGBND_PLACE_NAME {
+                log(&format!(
+                    "map_icons: label served PlaceName bnd={bnd} msg_id={msg_id} text_len={}",
                     msg.text.len()
                 ));
             }

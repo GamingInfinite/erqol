@@ -9,7 +9,6 @@ pub mod dungeon_warp;
 pub mod heavy_door;
 pub mod hp_bar_posture;
 pub mod map_in_combat;
-pub mod map_icons;
 pub mod merchant_bell_bearing;
 pub mod roundtable_at_home;
 pub mod skip_flask_confirm;
