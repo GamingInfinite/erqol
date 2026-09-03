@@ -7,11 +7,60 @@
     "pos": [44.74296, 179.22809, -78.66958]
   },
   {
+    "note": "Golden Seed",
+    "area_no": 60,
+    "grid_x_no": 46,
+    "grid_z_no": 36,
+    "pos": [-63.200657, 45.722, -49.404243]
+  },
+  {
+    "note": "Golden Seed",
+    "area_no": 60,
+    "grid_x_no": 44,
+    "grid_z_no": 32,
+    "pos": [-53.611427, 31.858496, -27.04557]
+  },
+  {
+    "note": "Golden Seed",
+    "area_no": 60,
+    "grid_x_no": 51,
+    "grid_z_no": 43,
+    "pos": [75.373764, 296.11972, -90.63103]
+  },
+  {
     "note": "Sacred Tear",
     "area_no": 60,
     "grid_x_no": 46,
     "grid_z_no": 38,
     "pos": [-91.67031, 3.3210611, 90.42685]
+  },
+  {
+    "note": "Sacred Tear",
+    "area_no": 60,
+    "grid_x_no": 43,
+    "grid_z_no": 35,
+    "pos": [-110.54576, 88.84911, -124.678825]
+  },
+  {
+    "note": "Sacred Tear",
+    "area_no": 60,
+    "grid_x_no": 41,
+    "grid_z_no": 33,
+    "pos": [45.515404, 32.51709, 60.30551]
+  },
+  {
+    "note": "Sacred Tear",
+    "area_no": 60,
+    "grid_x_no": 44,
+    "grid_z_no": 33,
+    "pos": [-77.415665, 90.71451, -72.62426]
+  },
+  {
+    "note": "Stonesword Key",
+    "area_no": 60,
+    "grid_x_no": 44,
+    "grid_z_no": 34,
+    "pos": [125.41448, 44.70136, 45.6315]
   },
   {
     "note": "Whetstone Knife",
@@ -21,17 +70,38 @@
     "pos": [73.98159, 84.01499, 51.43994]
   },
   {
-    "note": "Golden Seed",
-    "area_no": 60,
-    "grid_x_no": 46,
-    "grid_z_no": 36,
-    "pos": [-63.200657, 45.722, -49.404243]
-  },
-  {
     "note": "Dectus Half (Left)",
     "area_no": 60,
     "grid_x_no": 46,
     "grid_z_no": 36,
     "pos": [-4.877186, 91.07201, -36.209023]
+  },
+  {
+    "note": "Dectus Half (Right)",
+    "area_no": 60,
+    "grid_x_no": 51,
+    "grid_z_no": 39,
+    "pos": [-26.07103, 285.626, 134.69247]
+  },
+  {
+    "note": "Reed Great Katana",
+    "area_no": 60,
+    "grid_x_no": 50,
+    "grid_z_no": 40,
+    "pos": [145.1146, 265.9477, -5.993614]
+  },
+  {
+    "note": "Reduvia",
+    "area_no": 60,
+    "grid_x_no": 43,
+    "grid_z_no": 37,
+    "pos": [106.556854, 64.80899, 122.36069]
+  },
+  {
+    "note": "Somber Smithing Stone [9]",
+    "area_no": 60,
+    "grid_x_no": 49,
+    "grid_z_no": 41,
+    "pos": [38.435993, 155.01498, -75.06589]
   }
 ]
