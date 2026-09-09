@@ -223,6 +223,10 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 if config::with_feature(|c| c.map_icons) {
                     tweaks::map_icons::MAP_ICONS_INSTALLER.call_once(tweaks::map_icons::install);
                 }
+                if config::with_feature(|c| c.spirit_summon_everywhere) {
+                    tweaks::spirit_summon::SPIRIT_SUMMON_INSTALLER
+                        .call_once(tweaks::spirit_summon::install);
+                }
                 debug::player_position::tick();
                 qol::dungeon_warp::patch();
                 postures::speffects::SPEFFECTS_INSTALLER.call_once(postures::speffects::install);
