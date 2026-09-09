@@ -52,6 +52,7 @@ pub struct Config {
     pub map_icons: bool,
     pub map_icon_points: bool,
     pub map_icon_point_label: String,
+    pub silly_you_died: bool,
 }
 
 impl Default for Config {
@@ -79,6 +80,7 @@ impl Default for Config {
             map_icons: true,
             map_icon_points: false,
             map_icon_point_label: "Point".to_string(),
+            silly_you_died: true,
         }
     }
 }
@@ -159,12 +161,13 @@ pub fn load() {
             "map_icons" => cfg.map_icons = parse_bool(value),
             "map_icon_points" => cfg.map_icon_points = parse_bool(value),
             "map_icon_point_label" => cfg.map_icon_point_label = value.trim().to_string(),
+            "silly_you_died" => cfg.silly_you_died = parse_bool(value),
             _ => {}
         }
     }
 
     log(format!(
-         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={} hes={} hle={} mi={} mip={}",
+         "config: loaded from {}; dw={} mc={} ap={} sf={} afs={} car={} mbb={} rth={} pose={} phi={} pb={} pra={} pla={} pm={} pal={} sse={} hes={} hle={} mi={} mip={} syd={}",
         path.display(),
         cfg.dungeon_warp,
         cfg.map_in_combat,
@@ -186,6 +189,7 @@ pub fn load() {
          cfg.hook_lookup_entry,
          cfg.map_icons,
          cfg.map_icon_points,
+         cfg.silly_you_died,
     ));
 
     *config().lock().unwrap_or_else(|e| e.into_inner()) = cfg;
@@ -231,7 +235,10 @@ hp_bar_tracks = {hp_bar_tracks}\n\
            # Debug: log current player map position to erqol_points.json when
            # the hotkey (F9) is pressed. Requires map_icons = true.
            map_icon_points = {map_icon_points}\n\
-           map_icon_point_label = {label:?}\n",
+           map_icon_point_label = {label:?}\n\
+           # Silly string replacements:\n\
+           #   silly_you_died -- replace the \"You Died\" death text (default on).\n\
+           silly_you_died = {silly_you_died}\n",
         dungeon_warp = cfg.dungeon_warp,
         map_in_combat = cfg.map_in_combat,
         auto_pickup = cfg.auto_pickup,
@@ -253,6 +260,7 @@ hp_bar_tracks = {hp_bar_tracks}\n\
         hook_lookup_entry = cfg.hook_lookup_entry,
         map_icons = cfg.map_icons,
         map_icon_points = cfg.map_icon_points,
+        silly_you_died = cfg.silly_you_died,
     );
     drop(cfg);
 

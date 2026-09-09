@@ -1,5 +1,5 @@
 use std::ptr;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
 
 use ilhook::x64::Registers;
@@ -1095,6 +1095,165 @@ pub(crate) unsafe fn dump_state_group(state_group: *mut StateGroup) -> String {
     out
 }
 
+// ---- String replacement registry ----
+
+/// Registered string replacements: when the original `LookupEntry` returns a
+/// string whose (ASCII-lowercased) content contains `original_lower` as a
+/// substring, every occurrence is swapped for one of `candidates`. Matching is
+/// case-insensitive so a single registration catches "You Died", "YOU DIED",
+/// etc., and substrings are replaced so references inside item descriptions
+/// change too. Used by the `silly` module.
+struct StringReplacement {
+    original_lower: Vec<u16>,
+    /// Addresses of leaked, NUL-terminated candidate texts. With more than one
+    /// candidate a different one is chosen at random on each lookup.
+    candidates: Vec<usize>,
+    /// Consulted on every lookup (under lock) so config toggles apply live.
+    /// Defaults to always-on for registrations that want no config gate.
+    enabled: fn() -> bool,
+}
+
+/// Set once any replacement is registered; the lookup detour skips the whole
+/// block (no allocation, no lock) when no module has registered anything.
+static STRING_REPLACEMENTS_ARMED: AtomicBool = AtomicBool::new(false);
+
+static STRING_REPLACEMENTS: Mutex<Vec<StringReplacement>> = Mutex::new(Vec::new());
+
+/// Rebuilt result buffers, keyed by the raw input string. A text looked up
+/// repeatedly (e.g. an item tooltip re-read every frame) reuses its buffer
+/// instead of leaking one per call.
+static REPLACEMENT_CACHE: Mutex<Vec<(Vec<u16>, usize)>> = Mutex::new(Vec::new());
+const REPLACEMENT_CACHE_CAP: usize = 64;
+
+/// Registers a string replacement that is always active. When any
+/// `LookupEntry` call returns a string containing `original` (case-insensitive
+/// substring match), every occurrence is replaced with `replacement`. The
+/// replacement is NUL-terminated and leaked for static lifetime.
+#[allow(dead_code)]
+pub(crate) fn register_string_replacement(original: &str, replacement: &str) {
+    register_string_replacement_variants_if(original, &[replacement], || true);
+}
+
+/// Like [`register_string_replacement`], but the replacement only applies while
+/// `enabled` returns true. The predicate is called on every match attempt, so
+/// flipping config takes effect immediately without re-registering. Callers
+/// that want the swap always-on simply omit the gated form.
+#[allow(dead_code)]
+pub(crate) fn register_string_replacement_if(
+    original: &str,
+    replacement: &str,
+    enabled: fn() -> bool,
+) {
+    register_string_replacement_variants_if(original, &[replacement], enabled);
+}
+
+/// Registers a gateable string replacement that randomly picks one of several
+/// candidate texts on each matching lookup.
+pub(crate) fn register_string_replacement_variants_if(
+    original: &str,
+    replacements: &[&str],
+    enabled: fn() -> bool,
+) {
+    let original_lower: Vec<u16> = original.encode_utf16().map(lower_ascii_unit).collect();
+    let candidates: Vec<usize> = replacements
+        .iter()
+        .map(|r| encode_message_text(r).as_ptr() as usize)
+        .collect();
+    STRING_REPLACEMENTS_ARMED.store(true, Ordering::Relaxed);
+    STRING_REPLACEMENTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(StringReplacement {
+            original_lower,
+            candidates,
+            enabled,
+        });
+}
+
+/// Address of the candidate to use for `repl`: the single one if there is
+/// only one, otherwise a random pick.
+fn picked_candidate(repl: &StringReplacement) -> usize {
+    if repl.candidates.len() <= 1 {
+        return repl.candidates[0];
+    }
+    repl.candidates[next_random_index(repl.candidates.len() as u32) as usize]
+}
+
+/// Tiny xorshift64* PRNG used to pick replacement variants. Seeded lazily from
+/// the system clock on first use; afterwards it's pure integer math, so it's
+/// cheap enough to run inside the lookup detour.
+fn next_random_index(count: u32) -> u32 {
+    static SEED: AtomicU64 = AtomicU64::new(0);
+    let mut x = SEED.load(Ordering::Relaxed);
+    if x == 0 {
+        x = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9e37_79b9_7f4a_7c15)
+            | 1;
+    }
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    SEED.store(x, Ordering::Relaxed);
+    (x % count as u64) as u32
+}
+
+/// ASCII-only lowercase for a UTF-16 code unit. It maps one unit to one unit,
+/// so indices into the lowered copy line up 1:1 with the original string.
+fn lower_ascii_unit(unit: u16) -> u16 {
+    if (0x41..=0x5A).contains(&unit) {
+        unit + 0x20
+    } else {
+        unit
+    }
+}
+
+/// The replacement text proper: everything in the leaked buffer before its
+/// terminating NUL (the buffer is padded to a fixed capacity with zeros).
+fn replacement_text(repl: &[u16]) -> &[u16] {
+    let end = repl.iter().position(|&c| c == 0).unwrap_or(repl.len());
+    &repl[..end]
+}
+
+/// First index of `needle` in `haystack`, or `None`. Mirrors `str::find` over
+/// UTF-16 code units.
+fn find_subsequence(haystack: &[u16], needle: &[u16]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Reads a NUL-terminated UTF-16 string from a raw pointer into a `Vec<u16>`.
+unsafe fn read_utf16(ptr: *mut u16) -> Vec<u16> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    loop {
+        let ch = unsafe { *ptr.add(i) };
+        if ch == 0 {
+            break;
+        }
+        out.push(ch);
+        i += 1;
+    }
+    out
+}
+
+/// Decodes a NUL-terminated UTF-16 buffer at `addr` into a Rust `String` for
+/// log lines. Reads only until the first NUL, which always lands inside the
+/// leaked candidate buffer.
+fn show_utf16(addr: usize) -> String {
+    let units = unsafe { read_utf16(addr as *mut u16) };
+    let mut s = String::new();
+    for u in units {
+        if let Some(c) = char::from_u32(u as u32) {
+            s.push(c);
+        }
+    }
+    s
+}
+
 // ---- Feature registry ----
 
 type Patcher = unsafe fn(*mut StateGroup) -> bool;
@@ -1334,7 +1493,80 @@ unsafe extern "system" fn lookup_entry_detour(
     }
     let original_fn: extern "system" fn(*const core::ffi::c_void, u32, u32, i32) -> *mut u16 =
         unsafe { std::mem::transmute(trampoline) };
-    original_fn(repo, language, bnd, msg_id)
+    let result = original_fn(repo, language, bnd, msg_id);
+
+    // Apply registered string replacements on the game's lookup result.
+    // Skipped entirely (no allocation, no lock) until a module registers one.
+    if STRING_REPLACEMENTS_ARMED.load(Ordering::Relaxed) && !result.is_null() {
+        let text = unsafe { read_utf16(result) };
+        if !text.is_empty() {
+            // Case-insensitive comparison: lowercase one local copy of the
+            // incoming text and match every registered original against it.
+            let lowered: Vec<u16> = text.iter().map(|&u| lower_ascii_unit(u)).collect();
+            let repls = STRING_REPLACEMENTS.lock().unwrap_or_else(|e| e.into_inner());
+            for repl in repls.iter() {
+                if !(repl.enabled)() {
+                    continue;
+                }
+
+                // Whole-string match: hand back a static candidate buffer (NUL-terminated,
+                // leaked once) with no rebuild or caching.
+                if lowered.len() == repl.original_lower.len() && lowered == repl.original_lower {
+                    let cand = picked_candidate(repl);
+                    log(&format!(
+                        "ezstate_menu: LookupEntry string replaced -> '{}' (bnd={bnd} msg_id={msg_id})",
+                        show_utf16(cand)
+                    ));
+                    return cand as *mut u16;
+                }
+
+                // Case-insensitive substring match: swap every occurrence while
+                // preserving the surrounding text and its original casing.
+                if !find_subsequence(&lowered, &repl.original_lower).is_some() {
+                    continue;
+                }
+                let cand = picked_candidate(repl);
+                let cand_slice =
+                    unsafe { std::slice::from_raw_parts(cand as *const u16, MESSAGE_CAPACITY) };
+                let mut out: Vec<u16> = Vec::with_capacity(text.len());
+                let mut i = 0;
+                while i < lowered.len() {
+                    match find_subsequence(&lowered[i..], &repl.original_lower) {
+                        Some(pos) => {
+                            out.extend_from_slice(&text[i..i + pos]);
+                            out.extend_from_slice(replacement_text(cand_slice));
+                            i += pos + repl.original_lower.len();
+                        }
+                        None => {
+                            out.extend_from_slice(&text[i..]);
+                            break;
+                        }
+                    }
+                }
+                if out == text {
+                    continue;
+                }
+                log(&format!(
+                    "ezstate_menu: LookupEntry string replaced (bnd={bnd} msg_id={msg_id})"
+                ));
+                out.push(0);
+
+                // Reuse a previously built buffer for this exact input before
+                // leaking a fresh one.
+                let mut cache = REPLACEMENT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some((_, addr)) = cache.iter().find(|(key, _)| *key == text) {
+                    return *addr as *mut u16;
+                }
+                let ptr = Box::leak(out.into_boxed_slice()).as_mut_ptr();
+                cache.push((text, ptr as usize));
+                if cache.len() > REPLACEMENT_CACHE_CAP {
+                    cache.remove(0);
+                }
+                return ptr;
+            }
+        }
+    }
+    result
 }
 
 // ---- Installer ----

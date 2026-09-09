@@ -18,6 +18,7 @@ const MSG_CANCEL: i32 = 69_990_003;
 static MSG_SETTINGS: LazyLock<i32> = LazyLock::new(alloc_message_id);
 static MSG_CAT_QOL: LazyLock<i32> = LazyLock::new(alloc_message_id);
 static MSG_CAT_TWEAKS: LazyLock<i32> = LazyLock::new(alloc_message_id);
+static MSG_CAT_SILLY: LazyLock<i32> = LazyLock::new(alloc_message_id);
 
 static MSG_DUNGEON_WARP: LazyLock<i32> = LazyLock::new(alloc_message_id);
 static MSG_MAP_IN_COMBAT: LazyLock<i32> = LazyLock::new(alloc_message_id);
@@ -43,6 +44,8 @@ enum Category {
     /// Direct gameplay tweaks that alter how a fight can be played out
     /// (e.g. spirit summoning everywhere).
     Tweaks,
+    /// Silly string replacements and other jokes (see the `silly` module).
+    Silly,
 }
 
 struct Feature {
@@ -177,6 +180,7 @@ fn feature_label(name: &str, enabled: bool, needs_reload: bool) -> String {
 fn register_feature_messages() {
     register_message(*MSG_CAT_QOL, "QoL");
     register_message(*MSG_CAT_TWEAKS, "Tweaks");
+    register_message(*MSG_CAT_SILLY, "Silly");
     for feature in FEATURES {
         let enabled = config_value(feature.name);
         register_message(
@@ -312,6 +316,12 @@ pub(crate) fn init() {
 /// Builds the row list (feature toggles + a Cancel/back row) for one category
 /// submenu. Row indexes are 1-based sequential; Cancel is last and `is_default`.
 fn rows_for_category(category: Category) -> Vec<(i32, i32, bool, Option<SubMenuAction>)> {
+    if category == Category::Silly {
+        // The silly module owns its feature rows; we just append the back row.
+        let mut rows = crate::silly::rows();
+        rows.push((99, MSG_CANCEL, true, None));
+        return rows;
+    }
     let mut rows: Vec<(i32, i32, bool, Option<SubMenuAction>)> = Vec::new();
     for feature in FEATURES.iter().filter(|f| f.category == category) {
         rows.push((
@@ -337,6 +347,7 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
         let settings_rows: Vec<(i32, i32, bool, Option<SubMenuAction>)> = vec![
             (1, *MSG_CAT_QOL, false, None),
             (2, *MSG_CAT_TWEAKS, false, None),
+            (3, *MSG_CAT_SILLY, false, None),
             (99, MSG_CANCEL, true, None),
         ];
         let (settings_menu, settings_state) =
@@ -345,14 +356,18 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
         // Each category submenu returns to the settings list on Cancel/back.
         let qol_rows = rows_for_category(Category::Qol);
         let tweaks_rows = rows_for_category(Category::Tweaks);
+        let silly_rows = rows_for_category(Category::Silly);
         let (_qol_menu, qol_state) =
             SubMenu::link_from_rows_self_return_with_ptr(&qol_rows, settings_state);
         let (_tweaks_menu, tweaks_state) =
             SubMenu::link_from_rows_self_return_with_ptr(&tweaks_rows, settings_state);
+        let (_silly_menu, silly_state) =
+            SubMenu::link_from_rows_self_return_with_ptr(&silly_rows, settings_state);
 
         // Open the category submenu when its row is selected.
         SubMenu::set_option_target(settings_menu, 0, qol_state);
         SubMenu::set_option_target(settings_menu, 1, tweaks_state);
+        SubMenu::set_option_target(settings_menu, 2, silly_state);
 
         splice_option(state_group, OPTION_INDEX, *MSG_SETTINGS, settings_state)
     }

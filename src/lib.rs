@@ -18,6 +18,7 @@ mod memory;
 mod postures;
 mod qol;
 mod scan;
+mod silly;
 mod tweaks;
 
 // ---- Crash logging (VEH) ----
@@ -233,6 +234,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                     qol::merchant_bell_bearing::init();
                     qol::roundtable_at_home::init();
                     grace_settings::init();
+                    silly::init();
                     postures::mirror_menu::init();
                     ezstate_menu::install();
                 });
