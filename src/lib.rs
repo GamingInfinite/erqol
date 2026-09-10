@@ -230,6 +230,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 debug::player_position::tick();
                 qol::dungeon_warp::patch();
                 qol::level_up_indicator::tick();
+                qol::consume_all_runes::tick();
                 postures::speffects::SPEFFECTS_INSTALLER.call_once(postures::speffects::install);
                 postures::effects::tick();
                 ezstate_menu::MENU_INSTALLER.call_once(|| {

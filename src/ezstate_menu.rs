@@ -278,33 +278,52 @@ pub(crate) unsafe fn is_talk_list_result_transition(transition: *mut Transition)
 
 // ---- The injected menu option ----
 
-/// One `AddTalkListData(index, message_id, -1)` row plus the transition that
-/// fires when it's selected. Non-default options dispatch on
-/// `GetTalkListEntryResult() == index`; the default (cancel) option uses a
-/// constant-true evaluator so it also catches backing out of the menu.
+/// One `AddTalkListData(index, message_id, -1)` (or, when an indicator is
+/// requested, one `AddTalkListDataAlt(true_expr, index, message_id, -1, 0,
+/// indicator)`) row plus the transition that fires when it's selected.
+/// Non-default options dispatch on `GetTalkListEntryResult() == index`; the
+/// default (cancel) option uses a constant-true evaluator so it also catches
+/// backing out of the menu.
 struct MenuOption {
     is_default: bool,
     action: Option<SubMenuAction>,
+    /// `-1` = plain row (no talk-list indicator). `>= 0` = ALT row whose
+    /// indicator argument is a writable small-int literal.
+    indicator: i32,
     index_expr: [u8; 6],
     message_expr: [u8; 6],
     placeholder_expr: [u8; 6],
+    sort_expr: [u8; 6],
+    indicator_expr: [u8; 2],
     condition_expr: [u8; 9],
     true_expr: [u8; 2],
-    args: [Span<u8>; 3],
+    args3: [Span<u8>; 3],
+    args6: [Span<u8>; 6],
     transition: Transition,
 }
 
 impl MenuOption {
-    fn new(index: i32, message_id: i32, is_default: bool, action: Option<SubMenuAction>) -> Self {
+    fn new_with_indicator(
+        index: i32,
+        message_id: i32,
+        is_default: bool,
+        action: Option<SubMenuAction>,
+        indicator: i32,
+    ) -> Self {
+        let indicator_byte = 0x40u8.wrapping_add((indicator.clamp(0, 63)) as u8);
         Self {
             is_default,
             action,
+            indicator,
             index_expr: make_int_expression(index),
             message_expr: make_int_expression(message_id),
             placeholder_expr: make_int_expression(-1),
+            sort_expr: make_int_expression(0),
+            indicator_expr: [indicator_byte, 0xa1],
             condition_expr: make_talk_list_result_expression(index),
             true_expr: [0x41, 0xa1],
-            args: [Span::null(); 3],
+            args3: [Span::null(); 3],
+            args6: [Span::null(); 6],
             transition: Transition {
                 target_state: ptr::null_mut(),
                 pass_events: Span::null(),
@@ -317,7 +336,7 @@ impl MenuOption {
     /// Points the args/evaluator spans at our own byte arrays. Only call this
     /// once the option lives at a stable address (after leaking).
     fn link(&mut self) {
-        self.args = [
+        self.args3 = [
             Span {
                 ptr: self.index_expr.as_mut_ptr(),
                 len: self.index_expr.len(),
@@ -329,6 +348,32 @@ impl MenuOption {
             Span {
                 ptr: self.placeholder_expr.as_mut_ptr(),
                 len: self.placeholder_expr.len(),
+            },
+        ];
+        self.args6 = [
+            Span {
+                ptr: self.true_expr.as_mut_ptr(),
+                len: self.true_expr.len(),
+            },
+            Span {
+                ptr: self.index_expr.as_mut_ptr(),
+                len: self.index_expr.len(),
+            },
+            Span {
+                ptr: self.message_expr.as_mut_ptr(),
+                len: self.message_expr.len(),
+            },
+            Span {
+                ptr: self.placeholder_expr.as_mut_ptr(),
+                len: self.placeholder_expr.len(),
+            },
+            Span {
+                ptr: self.sort_expr.as_mut_ptr(),
+                len: self.sort_expr.len(),
+            },
+            Span {
+                ptr: self.indicator_expr.as_mut_ptr(),
+                len: self.indicator_expr.len(),
             },
         ];
         self.transition.evaluator = if self.is_default {
@@ -345,13 +390,29 @@ impl MenuOption {
     }
 
     fn add_talk_list_data_event(&self) -> Event {
-        Event {
-            command: ADD_TALK_LIST_DATA,
-            args: Span {
-                ptr: self.args.as_ptr() as *mut Span<u8>,
-                len: self.args.len(),
-            },
+        if self.indicator >= 0 {
+            Event {
+                command: ADD_TALK_LIST_DATA_ALT,
+                args: Span {
+                    ptr: self.args6.as_ptr() as *mut Span<u8>,
+                    len: self.args6.len(),
+                },
+            }
+        } else {
+            Event {
+                command: ADD_TALK_LIST_DATA,
+                args: Span {
+                    ptr: self.args3.as_ptr() as *mut Span<u8>,
+                    len: self.args3.len(),
+                },
+            }
         }
+    }
+
+    /// Address of the indicator literal byte (`indicator_expr[0]`), for
+    /// per-frame runtime updates. Only meaningful when `indicator >= 0`.
+    fn indicator_ptr(&mut self) -> *mut u8 {
+        std::ptr::addr_of_mut!(self.indicator_expr[0])
     }
 
     fn transition_ptr(&mut self) -> *mut Transition {
@@ -432,10 +493,23 @@ impl SubMenu {
     /// callback (via `ACTIONS` when the state machine enters the state) and
     /// then returns to the parent menu.
     pub(crate) fn new(rows: &[(i32, i32, bool, Option<SubMenuAction>)]) -> Self {
+        Self::new_with_indicators(rows, &[])
+    }
+
+    /// Same as [`SubMenu::new`], but row `i` with an indicator `>= 0` is built
+    /// as an `AddTalkListDataAlt` row whose indicator argument is a writable
+    /// `0x40 + v, 0xa1` literal (for per-frame glow updates). `indicators` may
+    /// be shorter than `rows`; missing entries default to plain rows (`-1`).
+    pub(crate) fn new_with_indicators(
+        rows: &[(i32, i32, bool, Option<SubMenuAction>)],
+        indicators: &[i32],
+    ) -> Self {
         let options = rows
             .iter()
-            .map(|&(index, message_id, is_default, action)| {
-                MenuOption::new(index, message_id, is_default, action)
+            .enumerate()
+            .map(|(i, &(index, message_id, is_default, action))| {
+                let indicator = indicators.get(i).copied().unwrap_or(-1);
+                MenuOption::new_with_indicator(index, message_id, is_default, action, indicator)
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -518,13 +592,7 @@ impl SubMenu {
             args: Span::null(),
         });
         for opt in &mut this.options {
-            events.push(Event {
-                command: ADD_TALK_LIST_DATA,
-                args: Span {
-                    ptr: opt.args.as_mut_ptr(),
-                    len: 3,
-                },
-            });
+            events.push(opt.add_talk_list_data_event());
         }
         events.push(Event {
             command: SHOW_SHOP_MESSAGE,
@@ -585,6 +653,7 @@ impl SubMenu {
 
     /// Same as [`link_from_rows`], but action rows return to the submenu itself
     /// rather than to a separate state. Used by self-contained toggles.
+    #[allow(dead_code)]
     pub(crate) unsafe fn link_from_rows_self_return(
         rows: &[(i32, i32, bool, Option<SubMenuAction>)],
         return_state: *mut State,
@@ -605,6 +674,19 @@ impl SubMenu {
         let self_state = unsafe { std::ptr::addr_of_mut!((*submenu).state) };
         let state = unsafe { SubMenu::link(submenu, return_state, self_state) };
         (submenu, state)
+    }
+
+    /// Same as [`link_from_rows_self_return`], but row `i` uses `indicators[i]`
+    /// as an `AddTalkListDataAlt` talk-list indicator (`-1`/missing = plain
+    /// row).
+    pub(crate) unsafe fn link_from_rows_self_return_with_indicators(
+        rows: &[(i32, i32, bool, Option<SubMenuAction>)],
+        indicators: &[i32],
+        return_state: *mut State,
+    ) -> *mut State {
+        let submenu = Box::into_raw(Box::new(SubMenu::new_with_indicators(rows, indicators)));
+        let self_state = unsafe { std::ptr::addr_of_mut!((*submenu).state) };
+        unsafe { SubMenu::link(submenu, return_state, self_state) }
     }
 
     /// Overrides the transition target of a row that was set during `link`.
@@ -784,18 +866,15 @@ impl YesNoDialog {
 /// fallback. The dispatch state is identified structurally by the
 /// `SetREG0(GetTalkListEntryResult())` evaluator prefix rather than any single
 /// menu's dispatch target. The option opens `target_state` when selected.
-/// Returns true if the state group was patched; the already-patched check (an
-/// existing `AddTalkListData` with `message_id`) makes later calls a no-op.
+/// Returns true if the state group was patched.
 pub(crate) unsafe fn splice_option(
     state_group: *mut StateGroup,
     option_index: i32,
     message_id: i32,
     target_state: *mut State,
 ) -> bool {
-    fn anchor(event: &Event) -> bool {
-        unsafe { is_sort_chest_event(event) }
-    }
-    unsafe { splice_option_anchored(state_group, option_index, message_id, target_state, anchor) }
+    unsafe { splice_option_anchored(state_group, option_index, message_id, target_state, anchor, -1) }
+        .is_some()
 }
 
 /// Like [`splice_option`], but anchors on any state whose entry events contain
@@ -810,7 +889,25 @@ pub(crate) unsafe fn splice_talk_list_option(
     fn anchor(event: &Event) -> bool {
         event.command == ADD_TALK_LIST_DATA
     }
-    unsafe { splice_option_anchored(state_group, option_index, message_id, target_state, anchor) }
+    unsafe { splice_option_anchored(state_group, option_index, message_id, target_state, anchor, -1) }
+        .is_some()
+}
+
+/// Like [`splice_option`], but the row is an `AddTalkListDataAlt` carrying a
+/// writable talk-list indicator. Returns the address of the indicator literal
+/// byte (so a per-frame task can drive the glow) when the row was spliced.
+pub(crate) unsafe fn splice_alt_option(
+    state_group: *mut StateGroup,
+    option_index: i32,
+    message_id: i32,
+    target_state: *mut State,
+    indicator: i32,
+) -> Option<*mut u8> {
+    unsafe { splice_option_anchored(state_group, option_index, message_id, target_state, anchor, indicator) }
+}
+
+fn anchor(event: &Event) -> bool {
+    unsafe { is_sort_chest_event(event) }
 }
 
 unsafe fn splice_option_anchored(
@@ -819,7 +916,8 @@ unsafe fn splice_option_anchored(
     message_id: i32,
     target_state: *mut State,
     anchor: fn(&Event) -> bool,
-) -> bool {
+    indicator: i32,
+) -> Option<*mut u8> {
     let states = unsafe { slice_of((*state_group).states) };
 
     let mut add_menu_state: Option<*mut State> = None;
@@ -847,26 +945,28 @@ unsafe fn splice_option_anchored(
     }
 
     let Some(add_menu_state) = add_menu_state else {
-        return false;
+        return None;
     };
     let Some(dispatch_state) = dispatch_state else {
-        return false;
+        return None;
     };
     if event_index == -1 {
-        return false;
+        return None;
     }
 
     // Build and leak the main menu option that opens the submenu.
-    let option = Box::into_raw(Box::new(MenuOption::new(
+    let option = Box::into_raw(Box::new(MenuOption::new_with_indicator(
         option_index,
         message_id,
         false,
         None,
+        indicator,
     )));
     unsafe {
         (*option).link();
         (*option).transition.target_state = target_state;
     }
+    let indicator_ptr = unsafe { (*option).indicator_ptr() };
 
     // Append our AddTalkListData event to the menu state's entry events.
     let old_events = unsafe { slice_of((*add_menu_state).entry_events) };
@@ -904,7 +1004,7 @@ unsafe fn splice_option_anchored(
         };
     }
 
-    true
+    Some(indicator_ptr)
 }
 
 /// Replaces the first entry event in any state for which `predicate` returns

@@ -1,12 +1,13 @@
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use eldenring::cs::{EquipParamGoods, GameDataMan, SoloParamRepository};
 use fromsoftware_shared::FromStatic;
 
 use crate::config;
 use crate::ezstate_menu::{
-    alloc_message_id, register_message, register_patcher, splice_option, StateGroup, SubMenu,
-    SubMenuAction,
+    alloc_message_id, event_arg_int, register_message, register_patcher, slice_of, splice_alt_option,
+    ADD_TALK_LIST_DATA_ALT, State, StateGroup, SubMenu, SubMenuAction,
 };
 use crate::log::log;
 
@@ -134,6 +135,86 @@ unsafe extern "C" fn consume_remembrances_action() {
     unsafe { consume_matching(is_remembrance, "remembrance") };
 }
 
+// ---- Talk-list indicators ----
+//
+// Each of the three rows we add carries a writable indicator literal (`0x40+v,
+// 0xa1`); the per-frame `tick` drives the glow: the two consume buttons light
+// when an item of the matching kind sits in the inventory, and the top-level
+// row forwards that state (either lit).
+//
+// Metadata is re-derived from the live ESD structures on every patch instead of
+// being cached in Rust: the top row's indicator address comes straight back
+// from `splice_alt_option`, and the submenu rows are located by scanning the
+// leaked submenu state's entry events.
+
+/// Indicator literal byte addresses `[top, golden, remembrance]`. Zero = not
+/// patched into the live group yet (never write through a zero address).
+static WRITER_ADDRS: LazyLock<Mutex<[usize; 3]>> = LazyLock::new(|| Mutex::new([0usize; 3]));
+
+/// Cached last-written indicator mask (`bit0 = rune, bit1 = remembrance,
+/// bit2 = top`) to avoid pointless memory writes every frame.
+static LAST_MASK: AtomicU8 = AtomicU8::new(0);
+
+fn store_writers(addrs: [usize; 3]) {
+    if let Ok(mut writers) = WRITER_ADDRS.lock() {
+        *writers = addrs;
+    }
+}
+
+/// True when any inventory item matches `is_target` with a nonzero stack.
+fn has_matching(is_target: impl Fn(u32) -> bool) -> bool {
+    let Ok(game_data_man) = GameDataMan::instance_ptr() else {
+        return false;
+    };
+    if game_data_man.is_null() {
+        return false;
+    }
+    let pgd_ptr = unsafe { (*game_data_man).main_player_game_data.as_ptr() };
+    if pgd_ptr.is_null() {
+        return false;
+    }
+    let pgd = unsafe { &*pgd_ptr };
+    let items_data = &pgd.equipment.equip_inventory_data.items_data;
+    items_data
+        .items()
+        .any(|entry| entry.quantity > 0 && is_target(entry.item_id.param_id()))
+}
+
+/// Scans one state's entry events for the given ALT row and returns the
+/// address of its indicator value byte (0 if not found).
+unsafe fn find_row_indicator(state: *mut State, message_id: i32) -> usize {
+    for event in unsafe { slice_of((*state).entry_events) } {
+        if event.command != ADD_TALK_LIST_DATA_ALT {
+            continue;
+        }
+        if unsafe { event_arg_int(event, 2) } != message_id {
+            continue;
+        }
+        if event.args.ptr.is_null() || event.args.len <= 5 {
+            continue;
+        }
+        let indicator_expr = unsafe { *event.args.ptr.add(5) };
+        if indicator_expr.ptr.is_null() {
+            continue;
+        }
+        return indicator_expr.ptr as usize;
+    }
+    0
+}
+
+/// True when the grace group already carries our top-level row (i.e. this live
+/// group was patched on an earlier grace open). Lets us skip re-splicing while
+/// keeping the writer addresses from the original splice valid.
+unsafe fn group_has_alt_row(state_group: *mut StateGroup, message_id: i32) -> bool {
+    for state in unsafe { slice_of((*state_group).states) } {
+        let state_ptr = state as *const State as *mut State;
+        if unsafe { find_row_indicator(state_ptr, message_id) } != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 // ---- Feature wiring ----
 
 /// Registers this feature's message texts and patch routine. Called once,
@@ -147,17 +228,25 @@ pub(crate) fn init() {
 }
 
 /// Adds the "Consume all Runes" option to a grace menu state group along with
-/// the submenu it opens. Safe to call on every grace menu open; the library's
-/// already-patched check makes it a no-op afterwards.
+/// the submenu it opens. Each row carries a talk-list indicator driving the
+/// button glow; the submenu indicators light when matching items are in the
+/// inventory, and the top-level row forwards that state.
 pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
     if !config::with_feature(|cfg| cfg.consume_all_runes) {
         return false;
     }
 
     unsafe {
-        let initial_state = (*state_group).initial_state;
+        let already = group_has_alt_row(state_group, *MSG_CONSUME_ALL_RUNES);
+        if already {
+            return false;
+        }
 
-        let submenu_state = SubMenu::link_from_rows_self_return(
+        let initial_state = (*state_group).initial_state;
+        let has_rune = has_matching(is_rune);
+        let has_remembrance = has_matching(is_remembrance);
+
+        let submenu_state = SubMenu::link_from_rows_self_return_with_indicators(
             &[
                 (
                     1,
@@ -173,14 +262,55 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
                 ),
                 (99, MSG_CANCEL, true, None),
             ],
+            &[has_rune as i32, has_remembrance as i32],
             initial_state,
         );
 
-        splice_option(
+        let golden_addr = find_row_indicator(submenu_state, *MSG_CONSUME_GOLDEN_RUNES);
+        let remembrance_addr = find_row_indicator(submenu_state, *MSG_CONSUME_REMEMBRANCES);
+
+        let top_addr = splice_alt_option(
             state_group,
             OPTION_INDEX,
             *MSG_CONSUME_ALL_RUNES,
             submenu_state,
-        )
+            (has_rune || has_remembrance) as i32,
+        );
+        let Some(top_addr) = top_addr else {
+            return false;
+        };
+
+        store_writers([top_addr as usize, golden_addr, remembrance_addr]);
+        true
+    }
+}
+
+/// Per-frame upkeep: writes the current indicator values into the three
+/// installed rows. Called by the recurring frame task.
+pub(crate) fn tick() {
+    let addrs = {
+        let Ok(writers) = WRITER_ADDRS.lock() else {
+            return;
+        };
+        *writers
+    };
+    if addrs[0] == 0 && addrs[1] == 0 && addrs[2] == 0 {
+        return;
+    }
+
+    let can_rune = has_matching(is_rune);
+    let can_remembrance = has_matching(is_remembrance);
+    let mask = (can_rune as u8)
+        | (can_remembrance as u8) << 1
+        | ((can_rune || can_remembrance) as u8) << 2;
+    if mask == LAST_MASK.swap(mask, Ordering::Relaxed) {
+        return;
+    }
+
+    unsafe {
+        let top_on = (can_rune || can_remembrance) as u8;
+        (addrs[0] as *mut u8).write(0x40 + top_on);
+        (addrs[1] as *mut u8).write(0x40 + can_rune as u8);
+        (addrs[2] as *mut u8).write(0x40 + can_remembrance as u8);
     }
 }
