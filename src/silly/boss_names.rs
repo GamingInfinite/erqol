@@ -9,5 +9,15 @@ fn enabled() -> bool {
 }
 
 pub(crate) fn init() {
-    reroute("Margit", &["Margaret"], enabled);
+    reroute("Margit", &["Margaret Thatcher", "Marge Simpson"], enabled);
+    reroute("The Fell Omen", &["the Fell Refund"], enabled);
+    reroute(
+        "Godrick the Grafted",
+        &[
+            "Godrick the Garfted",
+            "William Grafton",
+            "Godrick the Minecrafted",
+        ],
+        enabled,
+    );
 }
