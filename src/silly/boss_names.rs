@@ -20,4 +20,20 @@ pub(crate) fn init() {
         ],
         enabled,
     );
+    reroute(
+        "Starscourge Radahn",
+        &["Radahn, The Scourge of Reddit"],
+        enabled,
+    );
+    reroute(
+        "Maliketh, the Black Blade",
+        &["My Furry OC (Do NOT Steal)"],
+        enabled,
+    );
+    reroute("Red Wolf of Radagon", &["What the Dog Doing"], enabled);
+    reroute("Godfrey", &["God Freed", "Jake Paul"], enabled);
+    reroute("First Elden Lord", &["Bastard of the Badlands"], enabled);
+    reroute("Grafted Scion", &["Spider-man"], enabled);
+    reroute("Ancestor Spirit", &["Bambi", "Canadian"], enabled);
+    reroute("Erdtree Avatar", &["Sapient Tree"], enabled);
 }

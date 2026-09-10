@@ -9,6 +9,7 @@ const CANDIDATES: &[&str] = &[
     "NO BITCHES?",
     "AMONG US",
     "OW OOF HOT",
+    "SMURF'D",
     "SPECTACLE WRIGGLED",
     "YOU DIED",
     "GUARDS ALERTED",

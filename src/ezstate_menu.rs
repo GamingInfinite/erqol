@@ -1,6 +1,7 @@
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
+use std::time::{Duration, Instant};
 
 use ilhook::x64::Registers;
 
@@ -1104,13 +1105,31 @@ pub(crate) unsafe fn dump_state_group(state_group: *mut StateGroup) -> String {
 /// etc., and substrings are replaced so references inside item descriptions
 /// change too. Used by the `silly` module.
 struct StringReplacement {
+    /// Stable identity assigned at registration (the Vec can reallocate).
+    id: u64,
     original_lower: Vec<u16>,
     /// Addresses of leaked, NUL-terminated candidate texts. With more than one
-    /// candidate a different one is chosen at random on each lookup.
+    /// candidate a different one is chosen at random per *display lifetime*:
+    /// while the same text box keeps re-querying, the pick stays fixed, and it
+    /// re-rolls once that box goes idle (see [`StickyPick`]).
     candidates: Vec<usize>,
     /// Consulted on every lookup (under lock) so config toggles apply live.
     /// Defaults to always-on for registrations that want no config gate.
     enabled: fn() -> bool,
+}
+
+/// One recently-chosen random variant, keyed by the replacement and the text
+/// box `(bnd, msg_id)` it was shown in. A text box that re-queries
+/// `LookupEntry` every frame (boss health bar, splash text, menu readout)
+/// keeps reusing the same pick while its lookups keep arriving; once it has
+/// been quiet for longer than [`STICKY_IDLE`], the next lookup for that box
+/// rolls a fresh random.
+struct StickyPick {
+    repl_id: u64,
+    bnd: u32,
+    msg_id: i32,
+    pick: usize,
+    last_seen: Instant,
 }
 
 /// Set once any replacement is registered; the lookup detour skips the whole
@@ -1118,6 +1137,14 @@ struct StringReplacement {
 static STRING_REPLACEMENTS_ARMED: AtomicBool = AtomicBool::new(false);
 
 static STRING_REPLACEMENTS: Mutex<Vec<StringReplacement>> = Mutex::new(Vec::new());
+
+static NEXT_REPLACEMENT_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Sticky random-pick state, keyed per replacement + per text box.
+static REPLACEMENT_STICKY: Mutex<Vec<StickyPick>> = Mutex::new(Vec::new());
+/// How long a text box may stop querying before its next lookup re-rolls.
+const STICKY_IDLE: Duration = Duration::from_secs(1);
+const REPLACEMENT_STICKY_CAP: usize = 32;
 
 /// Rebuilt result buffers, keyed by the raw input string. A text looked up
 /// repeatedly (e.g. an item tooltip re-read every frame) reuses its buffer
@@ -1164,6 +1191,7 @@ pub(crate) fn register_string_replacement_variants_if(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push(StringReplacement {
+            id: NEXT_REPLACEMENT_ID.fetch_add(1, Ordering::Relaxed),
             original_lower,
             candidates,
             enabled,
@@ -1184,12 +1212,46 @@ pub(crate) fn reroute(original: &str, replacements: &[&str], enabled: fn() -> bo
 }
 
 /// Address of the candidate to use for `repl`: the single one if there is
-/// only one, otherwise a random pick.
-fn picked_candidate(repl: &StringReplacement) -> usize {
+/// only one, otherwise a random pick that stays fixed for the display lifetime
+/// of the text box `(bnd, msg_id)` (see [`StickyPick`]).
+fn picked_candidate(repl: &StringReplacement, bnd: u32, msg_id: i32) -> usize {
     if repl.candidates.len() <= 1 {
         return repl.candidates[0];
     }
-    repl.candidates[next_random_index(repl.candidates.len() as u32) as usize]
+    let idx = next_random_index(repl.candidates.len() as u32) as usize;
+    let now = Instant::now();
+    let mut sticky = REPLACEMENT_STICKY.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = sticky.iter_mut().find(|e| {
+        e.repl_id == repl.id && e.bnd == bnd && e.msg_id == msg_id
+    }) {
+        let gap = now - entry.last_seen;
+        if gap < STICKY_IDLE {
+            entry.last_seen = now;
+            if gap > Duration::from_millis(250) {
+                log(&format!(
+                    "ezstate_menu: sticky held pick '{}' (bnd={bnd} msg_id={msg_id}) after {gap:?} pause",
+                    show_utf16(repl.candidates[entry.pick])
+                ));
+            }
+            return repl.candidates[entry.pick];
+        }
+        entry.pick = idx;
+        entry.last_seen = now;
+        log(&format!(
+            "ezstate_menu: sticky re-rolled after {gap:?} idle (bnd={bnd} msg_id={msg_id}) -> '{}'",
+            show_utf16(repl.candidates[idx])
+        ));
+        return repl.candidates[entry.pick];
+    }
+    sticky.push(StickyPick { repl_id: repl.id, bnd, msg_id, pick: idx, last_seen: now });
+    if sticky.len() > REPLACEMENT_STICKY_CAP {
+        sticky.remove(0);
+    }
+    log(&format!(
+        "ezstate_menu: sticky fresh pick (bnd={bnd} msg_id={msg_id}) -> '{}'",
+        show_utf16(repl.candidates[idx])
+    ));
+    repl.candidates[idx]
 }
 
 /// Tiny xorshift64* PRNG used to pick replacement variants. Seeded lazily from
@@ -1525,11 +1587,9 @@ unsafe extern "system" fn lookup_entry_detour(
                 // Whole-string match: hand back a static candidate buffer (NUL-terminated,
                 // leaked once) with no rebuild or caching.
                 if lowered.len() == repl.original_lower.len() && lowered == repl.original_lower {
-                    let cand = picked_candidate(repl);
-                    log(&format!(
-                        "ezstate_menu: LookupEntry string replaced -> '{}' (bnd={bnd} msg_id={msg_id})",
-                        show_utf16(cand)
-                    ));
+                    // Sticky decisions are logged inside picked_candidate on
+                    // transitions only; per-frame lookups stay quiet.
+                    let cand = picked_candidate(repl, bnd, msg_id);
                     return cand as *mut u16;
                 }
 
@@ -1538,7 +1598,7 @@ unsafe extern "system" fn lookup_entry_detour(
                 if !find_subsequence(&lowered, &repl.original_lower).is_some() {
                     continue;
                 }
-                let cand = picked_candidate(repl);
+                let cand = picked_candidate(repl, bnd, msg_id);
                 let cand_slice =
                     unsafe { std::slice::from_raw_parts(cand as *const u16, MESSAGE_CAPACITY) };
                 let mut out: Vec<u16> = Vec::with_capacity(text.len());

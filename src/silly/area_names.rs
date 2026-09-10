@@ -16,4 +16,13 @@ pub(crate) fn init() {
     );
     reroute("Caelid", &["Gary, Indiana", "Mexico", "Detroit"], enabled);
     reroute("Aeonia", &["Florida"], enabled);
+    reroute("Roundtable Hold", &["The Metaverse"], enabled);
+    reroute("Limgrave", &["Derry, NI"], enabled);
+    reroute(
+        "Siofra River",
+        &["Quebec", "Space Mountain", "Montreal"],
+        enabled,
+    );
+    reroute("Weeping Peninsula", &["Upstate New York"], enabled);
+    reroute("Castle Morne", &["FurFest 20XX"], enabled);
 }
