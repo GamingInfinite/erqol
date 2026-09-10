@@ -234,6 +234,7 @@ pub unsafe extern "C" fn DllMain(hmodule: usize, reason: u32) -> bool {
                 ezstate_menu::MENU_INSTALLER.call_once(|| {
                     qol::anti_farm_shop::init();
                     qol::consume_all_runes::init();
+                    qol::level_up_indicator::init();
                     qol::skip_flask_confirm::init();
                     qol::merchant_bell_bearing::init();
                     qol::roundtable_at_home::init();

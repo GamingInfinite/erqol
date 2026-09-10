@@ -907,6 +907,45 @@ unsafe fn splice_option_anchored(
     true
 }
 
+/// Replaces the first entry event in any state for which `predicate` returns
+/// true with the given replacement events, inserted at the same position.
+/// Rebuilds and leaks the containing state's entry_events array (the original
+/// array is left allocated; the game never frees modified state groups).
+/// Returns true if a replacement happened. Used e.g. by `level_up_indicator`
+/// to swap a vanilla row for runtime-constructed ALT rows.
+pub(crate) unsafe fn replace_entry_event(
+    state_group: *mut StateGroup,
+    predicate: fn(&Event) -> bool,
+    replacements: &[Event],
+) -> bool {
+    let states = unsafe { slice_of((*state_group).states) };
+    for state in states {
+        let state_ptr = state as *const State as *mut State;
+        let old_events = unsafe { slice_of((*state_ptr).entry_events) };
+        for (i, event) in old_events.iter().enumerate() {
+            if !predicate(event) {
+                continue;
+            }
+            let mut new_events: Vec<Event> = Vec::with_capacity(
+                old_events.len() + replacements.len() - 1,
+            );
+            new_events.extend_from_slice(&old_events[..i]);
+            new_events.extend_from_slice(replacements);
+            new_events.extend_from_slice(&old_events[i + 1..]);
+            let count = new_events.len();
+            let ptr = Box::into_raw(new_events.into_boxed_slice()) as *mut Event;
+            unsafe {
+                (*state_ptr).entry_events = Span {
+                    ptr,
+                    len: count,
+                };
+            }
+            return true;
+        }
+    }
+    false
+}
+
 // ---- Transition redirection ----
 
 /// Redirects a transition's target state by rewriting the target pointer in
