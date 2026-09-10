@@ -123,6 +123,12 @@ unsafe fn consume_matching(is_target: impl Fn(u32) -> bool, label: &str) {
     log(format!(
         "consume_all_runes: consumed {consumed_count} {label} items for {total_value} runes"
     ));
+
+    // Flush the indicator literals now, before the menu state machine returns
+    // to the (sub)menu state and rebuilds the talk list. The per-frame `tick`
+    // runs on the next frame — too late to stop a rebuild that reads the stale
+    // byte — so the consumed glow is cleared synchronously here instead.
+    refresh_indicators(true);
 }
 
 /// Runs on the game's main thread when the player picks "Consume Golden Runes".
@@ -285,9 +291,12 @@ pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
     }
 }
 
-/// Per-frame upkeep: writes the current indicator values into the three
-/// installed rows. Called by the recurring frame task.
-pub(crate) fn tick() {
+/// Recomputes the three indicator values from the live inventory and writes
+/// them into the installed rows. With `write_always`, the bytes are written
+/// unconditionally (used right after a consume, so the rebuild that follows
+/// immediately reads the fresh values). Otherwise the write is skipped when the
+/// cached mask already matches, as an optimization for the per-frame tick.
+fn refresh_indicators(write_always: bool) {
     let addrs = {
         let Ok(writers) = WRITER_ADDRS.lock() else {
             return;
@@ -303,14 +312,21 @@ pub(crate) fn tick() {
     let mask = (can_rune as u8)
         | (can_remembrance as u8) << 1
         | ((can_rune || can_remembrance) as u8) << 2;
-    if mask == LAST_MASK.swap(mask, Ordering::Relaxed) {
+    if !write_always && mask == LAST_MASK.load(Ordering::Relaxed) {
         return;
     }
 
+    LAST_MASK.store(mask, Ordering::Relaxed);
     unsafe {
         let top_on = (can_rune || can_remembrance) as u8;
         (addrs[0] as *mut u8).write(0x40 + top_on);
         (addrs[1] as *mut u8).write(0x40 + can_rune as u8);
         (addrs[2] as *mut u8).write(0x40 + can_remembrance as u8);
     }
+}
+
+/// Per-frame upkeep: writes the current indicator values into the three
+/// installed rows. Called by the recurring frame task.
+pub(crate) fn tick() {
+    refresh_indicators(false);
 }
