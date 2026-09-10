@@ -9,12 +9,14 @@
 
 pub(crate) mod area_names;
 pub(crate) mod boss_names;
-pub(crate) mod you_died;
+pub(crate) mod item_names;
+pub(crate) mod splash_screen;
 
 /// Registers the per-feature replacements. Called from the MENU_INSTALLER
 /// closure before `ezstate_menu::install()`.
 pub(crate) fn init() {
-    you_died::init();
+    splash_screen::init();
     area_names::init();
     boss_names::init();
+    item_names::init();
 }

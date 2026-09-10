@@ -14,7 +14,16 @@ pub(crate) fn init() {
         &["Ligma of the Lakes", "Eastern Europe"],
         enabled,
     );
-    reroute("Caelid", &["Gary, Indiana", "Mexico", "Detroit"], enabled);
+    reroute(
+        "Raya Lucaria",
+        &["Malaysia Lucario", "Hog Warts", "Raging Lucario"],
+        enabled,
+    );
+    reroute(
+        "Caelid",
+        &["Gary, Indiana", "Mexico", "Brasil", "Detroit"],
+        enabled,
+    );
     reroute("Aeonia", &["Florida"], enabled);
     reroute("Roundtable Hold", &["The Metaverse"], enabled);
     reroute("Limgrave", &["Derry, NI"], enabled);
@@ -25,4 +34,11 @@ pub(crate) fn init() {
     );
     reroute("Weeping Peninsula", &["Upstate New York"], enabled);
     reroute("Castle Morne", &["FurFest 20XX"], enabled);
+    reroute("Stormveil", &["Garfielf"], enabled);
+    reroute(
+        "Village of the Albinaurics",
+        &["Elden Ring Albania"],
+        enabled,
+    );
+    reroute("Dragon", &["Deez Nutz"], enabled);
 }

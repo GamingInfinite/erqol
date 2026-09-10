@@ -1714,53 +1714,74 @@ unsafe extern "system" fn lookup_entry_detour(
     if STRING_REPLACEMENTS_ARMED.load(Ordering::Relaxed) && !result.is_null() {
         let text = unsafe { read_utf16(result) };
         if !text.is_empty() {
-            // Case-insensitive comparison: lowercase one local copy of the
-            // incoming text and match every registered original against it.
-            let lowered: Vec<u16> = text.iter().map(|&u| lower_ascii_unit(u)).collect();
+            // Replacements LAYER in registration order: each enabled entry that
+            // matches transforms the running text, and the next entry sees the
+            // transformed result. The first registered reroute is the bottom
+            // layer (sees the game's raw text), the last is the top layer, so
+            // whole/full-name reformats should be registered before the specific
+            // substring swaps that should also rewrite inside their output.
+            // Each entry is applied at most once per lookup, so a replacement
+            // whose output contains its own original cannot loop.
             let repls = STRING_REPLACEMENTS.lock().unwrap_or_else(|e| e.into_inner());
+            let mut current = text.clone();
+            let mut current_lower: Vec<u16> =
+                current.iter().map(|&u| lower_ascii_unit(u)).collect();
             for repl in repls.iter() {
                 if !(repl.enabled)() {
                     continue;
                 }
 
-                // Whole-string match: hand back a static candidate buffer (NUL-terminated,
-                // leaked once) with no rebuild or caching.
-                if lowered.len() == repl.original_lower.len() && lowered == repl.original_lower {
+                // Whole-string match: swap the entire text for a candidate.
+                if current_lower.len() == repl.original_lower.len()
+                    && current_lower == repl.original_lower
+                {
                     // Sticky decisions are logged inside picked_candidate on
                     // transitions only; per-frame lookups stay quiet.
                     let cand = picked_candidate(repl, bnd, msg_id);
-                    return cand as *mut u16;
+                    let cand_slice = unsafe {
+                        std::slice::from_raw_parts(cand as *const u16, MESSAGE_CAPACITY)
+                    };
+                    current = replacement_text(cand_slice).to_vec();
+                    current_lower = current.iter().map(|&u| lower_ascii_unit(u)).collect();
+                    continue;
                 }
 
                 // Case-insensitive substring match: swap every occurrence while
                 // preserving the surrounding text and its original casing.
-                if !find_subsequence(&lowered, &repl.original_lower).is_some() {
+                if !find_subsequence(&current_lower, &repl.original_lower).is_some() {
                     continue;
                 }
                 let cand = picked_candidate(repl, bnd, msg_id);
-                let cand_slice =
-                    unsafe { std::slice::from_raw_parts(cand as *const u16, MESSAGE_CAPACITY) };
-                let mut out: Vec<u16> = Vec::with_capacity(text.len());
+                let cand_slice = unsafe {
+                    std::slice::from_raw_parts(cand as *const u16, MESSAGE_CAPACITY)
+                };
+                let mut out: Vec<u16> = Vec::with_capacity(current.len());
                 let mut i = 0;
-                while i < lowered.len() {
-                    match find_subsequence(&lowered[i..], &repl.original_lower) {
+                while i < current_lower.len() {
+                    match find_subsequence(&current_lower[i..], &repl.original_lower) {
                         Some(pos) => {
-                            out.extend_from_slice(&text[i..i + pos]);
+                            out.extend_from_slice(&current[i..i + pos]);
                             out.extend_from_slice(replacement_text(cand_slice));
                             i += pos + repl.original_lower.len();
                         }
                         None => {
-                            out.extend_from_slice(&text[i..]);
+                            out.extend_from_slice(&current[i..]);
                             break;
                         }
                     }
                 }
-                if out == text {
+                if out == current {
                     continue;
                 }
+                current = out;
+                current_lower = current.iter().map(|&u| lower_ascii_unit(u)).collect();
+            }
+
+            if current != text {
                 log(&format!(
                     "ezstate_menu: LookupEntry string replaced (bnd={bnd} msg_id={msg_id})"
                 ));
+                let mut out = current;
                 out.push(0);
 
                 // Reuse a previously built buffer for this exact input before

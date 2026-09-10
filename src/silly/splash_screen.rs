@@ -25,6 +25,12 @@ const CANDIDATES: &[&str] = &[
     "A MIMIR",
     "PENIS DESTROYED",
     "FUCKING OBAMA NATION",
+    "IT'S SPREADING",
+    "GET MIYAZAKI'D",
+    "WELCOME TO YOUKOSO JAPARI PARK",
+    "FORESKIN EVISCERATED",
+    "JOHN F. KENNEDY",
+    "AMERICAN TRAFFIC",
 ];
 
 /// Live-only gate from the grace menu (no section-wide "silly" toggle).
@@ -33,5 +39,10 @@ fn enabled() -> bool {
 }
 
 pub(crate) fn init() {
-    reroute("You Died", CANDIDATES, enabled);
+    reroute("YOU DIED", CANDIDATES, enabled);
+    reroute(
+        "GREAT ENEMY FELLED",
+        &["GREAT ENEMY FELLED", "BALLS CRUNCHED"],
+        enabled,
+    );
 }

@@ -91,6 +91,7 @@ pub struct BoolFlags {
     pub silly_you_died: bool,
     pub silly_area_names: bool,
     pub silly_boss_names: bool,
+    pub silly_item_names: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +362,17 @@ pub(crate) static TOGGLES: &[BoolToggle] = &[
         action: Some(toggle_boss_names),
         on_change: None,
     },
+    BoolToggle {
+        key: "silly_item_names",
+        label: "Item Name Replacement",
+        category: Some(Category::Silly),
+        needs_reload: false,
+        default: true,
+        get: |c| c.silly_item_names,
+        set: |c, v| c.silly_item_names = v,
+        action: Some(toggle_item_names),
+        on_change: None,
+    },
 ];
 
 // ---- Menu toggle actions ----
@@ -413,6 +425,10 @@ unsafe extern "C" fn toggle_area_names() {
 
 unsafe extern "C" fn toggle_boss_names() {
     apply_toggle("silly_boss_names");
+}
+
+unsafe extern "C" fn toggle_item_names() {
+    apply_toggle("silly_item_names");
 }
 
 /// Message ids for the menu rows, allocated only for knobs that are shown in a
@@ -584,6 +600,7 @@ pub fn save() {
          #   silly_you_died     -- replace the \"You Died\" death text (default on)\n\
          #   silly_area_names   -- replace area-name splash texts (default on)\n\
          #   silly_boss_names   -- replace boss-name texts (default on)\n\
+         #   silly_item_names   -- replace item-name texts (default on)\n\
          \n"
     );
     for toggle in TOGGLES {
