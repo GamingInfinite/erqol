@@ -7,18 +7,26 @@
 //! with two `5:149` (`ADD_TALK_LIST_DATA_ALT`) rows that are mutually
 //! exclusive at runtime:
 //!
-//!   ON:  `flags && GetPlayerStat(RunesCollected) >= cost`  -> indicator 1
-//!   OFF: `flags && GetPlayerStat(RunesCollected) <  cost`  -> indicator 0
+//!   ON:  `flags && afford`  -> indicator 1
+//!   OFF: `flags && !afford` -> indicator 0
 //!
 //! Both rows keep the vanilla slot and message id, so the existing dispatch
 //! (`GetTalkListEntryResult() == 2 -> state 18 -> ... -> OpenSoul`) is
 //! untouched. Exactly one row exists per menu open, so the row stays selectable
 //! and only the indicator flips.
 //!
-//! The cost is not available to the ESD VM as a constant, so the two condition
-//! expressions embed a 4-byte literal that this module re-writes on every grace
-//! menu open (the state machine re-evaluates the row conditions each time the
-//! group's initial state is entered, before our back-fill's effects are read).
+//! Affordability cannot be computed inside the ESD VM: there is no level-up
+//! cost function, and the spendable rune pool is not reliably exposed as a
+//! `GetPlayerStat` value. So this module computes `afford` on the Rust side
+//! every frame from `PlayerGameData` (`level` + `rune_count`) and writes a
+//! 1-byte literal (`0x41` = true, `0x40` = false) into both rows' conditions.
+//! The VM then only evaluates `flags && <literal>`. Because the literal is
+//! rewritten every frame (not merely on group initial-state entry), it is
+//! always current by the time the talk list rows are re-added after a level-up
+//! round-trip.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use eldenring::cs::GameDataMan;
 use fromsoftware_shared::FromStatic;
@@ -35,10 +43,14 @@ use crate::log::log;
 const MSG_LEVEL_UP: i32 = 15000540;
 /// Character level at which no further level ups are possible.
 const MAX_LEVEL: u32 = 713;
-/// Back-filled cost when the player is at max level: larger than the maximum
-/// number of held runes (999,999,999), so `runes < cost` is always true and
-/// the indicator stays off while the row remains available.
-const COST_MAX_LEVEL: u32 = 1_000_000_000;
+
+/// Single-byte ESD small-int constants: `0x40 + value` for -64..=63.
+const ESD_TRUE: u8 = 0x41; // 1
+const ESD_FALSE: u8 = 0x40; // 0
+/// Opcode for logical AND.
+const OP_AND: u8 = 0x98;
+/// End-of-expression terminator.
+const OP_TERM: u8 = 0xA1;
 
 /// `GetEventFlag(4680) == 1 || GetEventFlag(4699) == 1`, copied byte-for-byte
 /// from the vanilla Level Up row's condition argument (ground truth, group
@@ -49,34 +61,18 @@ const FLAGS_COND: [u8; 19] = [
     0x99, // ||
 ];
 
-/// `GetPlayerStat(RunesCollected)` = `0x82 <id104> 0x82 <8> 0x85` (11 bytes),
-/// using the 4-byte int form for both the function id and the stat arg. The
-/// trailing `0x85` is the 1-arg call opcode (0x84 + arity).
-const GET_PLAYER_STAT_RUNES: [u8; 11] = [
-    0x82, 0x68, 0x00, 0x00, 0x00, // function id 104
-    0x82, 0x08, 0x00, 0x00, 0x00, // stat 8 (RunesCollected)
-    0x85, // call(1)
-];
-
-/// Byte offset of the cost literal inside a built condition expression:
-/// the `0x82` prefix that precedes the 4-byte little-endian cost value. The
-/// builder and the back-filler share this so they can never drift.
-const COST_EXPR_OFFSET: usize = FLAGS_COND.len() + GET_PLAYER_STAT_RUNES.len() + 1;
+/// Byte offset of the affordability literal inside a condition expression:
+/// immediately after [`FLAGS_COND`], before the `&&` opcode and terminator.
+const AFFORD_OFFSET: usize = FLAGS_COND.len();
 
 /// Builds a full condition expression (with terminator):
-/// `flags && GetPlayerStat(8) <op> cost`.
-/// `ge` selects `>=` (affordable, indicator ON row) vs `<` (NOT affordable,
-/// indicator OFF row). Returns the buffer and the written cost (for the
-/// caller to re-derive [`COST_EXPR_OFFSET`] is unnecessary; offset is const).
-fn build_condition(cost: u32, ge: bool) -> Vec<u8> {
-    let mut c = Vec::with_capacity(FLAGS_COND.len() + GET_PLAYER_STAT_RUNES.len() + 9);
+/// `flags && afford`, where `afford` is a 1-byte literal.
+fn build_condition(afford: bool) -> Vec<u8> {
+    let mut c = Vec::with_capacity(FLAGS_COND.len() + 3);
     c.extend_from_slice(&FLAGS_COND);
-    c.extend_from_slice(&GET_PLAYER_STAT_RUNES);
-    c.push(0x82);
-    c.extend_from_slice(&cost.to_le_bytes());
-    c.push(if ge { 0x92 } else { 0x93 }); // >= / <
-    c.push(0x98); // &&
-    c.push(0xa1); // terminator
+    c.push(if afford { ESD_TRUE } else { ESD_FALSE });
+    c.push(OP_AND);
+    c.push(OP_TERM);
     c
 }
 
@@ -84,12 +80,6 @@ fn build_condition(cost: u32, ge: bool) -> Vec<u8> {
 /// text id (arg 2) is the Level Up message.
 fn is_level_up_if(event: &Event) -> bool {
     event.command == ADD_TALK_LIST_DATA_IF
-        && unsafe { event_arg_int(event, 2) } == MSG_LEVEL_UP
-}
-
-/// True for one of our installed `5:149` Level Up rows.
-fn is_level_up_alt(event: &Event) -> bool {
-    event.command == ADD_TALK_LIST_DATA_ALT
         && unsafe { event_arg_int(event, 2) } == MSG_LEVEL_UP
 }
 
@@ -110,11 +100,12 @@ struct LevelUpRows {
 }
 
 impl LevelUpRows {
-    /// Builds both ALT rows with placeholder cost 0 (back-filled on install).
-    /// `slot` is the vanilla Level Up row's slot so dispatch stays unchanged.
-    fn new(slot: i32, cost: u32) -> Self {
-        let on_cond = build_condition(cost, true).into_boxed_slice();
-        let off_cond = build_condition(cost, false).into_boxed_slice();
+    /// Builds both ALT rows with a placeholder affordability literal
+    /// (`false`, so neither shows an indicator yet). `slot` is the vanilla
+    /// Level Up row's slot so dispatch stays unchanged.
+    fn new(slot: i32) -> Self {
+        let on_cond = build_condition(false).into_boxed_slice();
+        let off_cond = build_condition(false).into_boxed_slice();
         Self {
             slot: make_int_expression(slot),
             msg: make_int_expression(MSG_LEVEL_UP),
@@ -165,14 +156,40 @@ impl LevelUpRows {
             len: self.off_args.len(),
         };
     }
+
+    /// Rewrites the affordability literal in both rows' conditions. `afford`
+    /// true -> ON row shows the indicator; false -> OFF row (no indicator).
+    fn set_afford(&mut self, afford: bool) {
+        let v = if afford { ESD_TRUE } else { ESD_FALSE };
+        self.on_cond[AFFORD_OFFSET] = v;
+        self.off_cond[AFFORD_OFFSET] = if afford { ESD_FALSE } else { ESD_TRUE };
+    }
 }
+
+/// Addresses of the affordability literal byte inside the two leaked rows'
+/// condition buffers, once installed. `on` is the ON row (indicator 1), `off`
+/// the OFF row (indicator 0). Stored as raw addresses so the cache is
+/// Send/Sync; the underlying buffers are leaked and stay valid for the whole
+/// process lifetime.
+#[derive(Clone, Copy)]
+struct AffordWriters {
+    on: usize,
+    off: usize,
+}
+
+/// The installed writers, once installed. None until the first grace menu
+/// entry.
+static WRITERS: LazyLock<Mutex<Option<AffordWriters>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Last affordability value written, to avoid rewriting identical bytes.
+static LAST_AFFORD: AtomicBool = AtomicBool::new(false);
 
 /// Cost to level from `level` to `level + 1`, using the verified curve
 /// `x = max(0, (level - 11) * 0.02); floor((x + 0.1) * (level + 81)^2) + 1`.
-/// At max level returns a sentinel so the indicator stays off.
 fn level_up_cost(level: u32) -> u32 {
     if level >= MAX_LEVEL {
-        return COST_MAX_LEVEL;
+        return u32::MAX; // sentinel: never affordable
     }
     let l = level as f64;
     let base = (l - 11.0) * 0.02;
@@ -182,8 +199,8 @@ fn level_up_cost(level: u32) -> u32 {
     cost.min(u32::MAX as u64) as u32
 }
 
-/// The player's current character level from game data.
-fn player_level() -> Option<u32> {
+/// The player's current level and held rune count from game data.
+fn player_data() -> Option<(u32, u32)> {
     let man = GameDataMan::instance_ptr().ok()?;
     if man.is_null() {
         return None;
@@ -192,44 +209,45 @@ fn player_level() -> Option<u32> {
     if pgd.is_null() {
         return None;
     }
-    Some(unsafe { (*pgd).level })
+    let level = unsafe { (*pgd).level };
+    let runes = unsafe { (*pgd).rune_count };
+    Some((level, runes))
 }
 
-/// Re-writes the cost literal inside both installed ALT rows' condition
-/// expressions. Runs on every grace menu open so the row reflects the current
-/// level (cost rises with level) as well as current held runes (evaluated live
-/// by the VM via `GetPlayerStat`). Byte offset is the same for both rows.
-fn backfill_cost(state_group: *mut StateGroup, cost: u32) -> bool {
-    // Misaligned slot in the event by finding the ALT row's condition arg, then
-    // writing the 4 LE bytes at the fixed expression offset.
-    let states = unsafe { slice_of((*state_group).states) };
-    let mut wrote = false;
-    for state in states {
-        for event in unsafe { slice_of(state.entry_events) } {
-            if !is_level_up_alt(event) || event.args.len < 6 || event.args.ptr.is_null() {
-                continue;
-            }
-            let cond = unsafe { *event.args.ptr };
-            if cond.ptr.is_null()
-                || cond.len < COST_EXPR_OFFSET + 4
-                || unsafe { *cond.ptr.add(COST_EXPR_OFFSET - 1) } != 0x82
-            {
-                continue;
-            }
-            unsafe {
-                let dst = cond.ptr.add(COST_EXPR_OFFSET) as *mut u8;
-                std::ptr::copy_nonoverlapping(&cost.to_le_bytes()[0], dst, 4);
-            }
-            wrote = true;
+/// Whether the player can currently afford the next level.
+fn can_afford() -> bool {
+    player_data().map_or(false, |(level, runes)| runes >= level_up_cost(level))
+}
+
+/// Re-writes the affordability literal into the installed rows based on the
+/// current level/rune count. Runs every frame so the talk list rows are always
+/// fresh when the grace menu re-adds them after a level-up round-trip.
+fn refresh() {
+    if !config::with_feature(|cfg| cfg.level_up_indicator) {
+        return;
+    }
+    let afford = can_afford();
+    if LAST_AFFORD.swap(afford, Ordering::Relaxed) == afford {
+        return;
+    }
+    let (v_on, v_off) = if afford {
+        (ESD_TRUE, ESD_FALSE)
+    } else {
+        (ESD_FALSE, ESD_TRUE)
+    };
+    let guard = WRITERS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(w) = *guard {
+        unsafe {
+            *(w.on as *mut u8) = v_on;
+            *(w.off as *mut u8) = v_off;
         }
     }
-    wrote
 }
 
 /// Installs the two ALT Level Up rows over the vanilla `5:19` row, once.
-/// Returns true if a structural change was made. Leaks the rows so the event
-/// must never be rebuilt; idempotent (a later call finds the ALT rows, not the
-/// vanilla row, and falls through to [`backfill_cost`] only).
+/// Returns true if a structural change was made. Leaks the rows and caches
+/// their affordability-literal addresses for [`refresh`]; idempotent (a later
+/// call finds no vanilla row).
 unsafe fn install_rows(state_group: *mut StateGroup) -> bool {
     // Find the vanilla Level Up row and read the slot it used, so dispatch
     // (which fires on that slot number) is preserved exactly.
@@ -252,40 +270,45 @@ unsafe fn install_rows(state_group: *mut StateGroup) -> bool {
         return false;
     }
 
-    let cost = player_level().map(level_up_cost).unwrap_or(0);
-    let rows = Box::leak(Box::new(LevelUpRows::new(slot, cost)));
+    // Refuse to install a second copy if writers already exist.
+    let mut guard = WRITERS.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        return false;
+    }
+
+    let rows = Box::leak(Box::new(LevelUpRows::new(slot)));
     rows.link();
+    let afford = can_afford();
+    rows.set_afford(afford);
+    LAST_AFFORD.store(afford, Ordering::Relaxed);
 
     let events = [rows.on_event, rows.off_event];
     let replaced = unsafe { replace_entry_event(state_group, is_level_up_if, &events) };
     if replaced {
+        let (level, runes) = player_data().unwrap_or((0, 0));
         log(&format!(
-            "level_up_indicator: replaced Level Up row (slot {slot}, cost {cost}) with ALT rows"
+            "level_up_indicator: installed ALT rows (slot {slot}, level {level}, runes {runes})"
         ));
+        *guard = Some(AffordWriters {
+            on: rows.on_cond.as_ptr() as usize + AFFORD_OFFSET,
+            off: rows.off_cond.as_ptr() as usize + AFFORD_OFFSET,
+        });
     }
     replaced
 }
 
-/// Runs on every grace menu initial-state entry. First call replaces the
-/// vanilla Level Up row; every call (including the first) back-fills the cost
-/// literal into the installed rows based on the player's current level.
+/// Runs on every grace menu initial-state entry. Installs the rows once.
 pub(crate) fn patch(state_group: *mut StateGroup) -> bool {
     if !config::with_feature(|cfg| cfg.level_up_indicator) {
         return false;
     }
+    unsafe { install_rows(state_group) }
+}
 
-    unsafe {
-        // Back-fill cost first so a freshly installed set of rows is correct
-        // even when the player already out-leveled the placeholder cost 0.
-        if let Some(level) = player_level() {
-            let cost = level_up_cost(level);
-            backfill_cost(state_group, cost);
-        }
-
-        // Structural replacement is a one-time action; returns true only on the
-        // first successful swap.
-        install_rows(state_group)
-    }
+/// Runs once per frame from the frame-begin recurring task, keeping the rows'
+/// affordability literal in sync with the player's current rune count.
+pub(crate) fn tick() {
+    refresh();
 }
 
 /// Registers this feature's patch routine. Called once at init.
