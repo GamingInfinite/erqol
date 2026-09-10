@@ -1170,6 +1170,19 @@ pub(crate) fn register_string_replacement_variants_if(
         });
 }
 
+/// General text-replacement registration: whenever a `LookupEntry` result
+/// contains `original` (case-insensitive substring), swap it for one randomly
+/// picked `replacements` entry. Null-terminated and leaked for static lifetime.
+/// The single-candidate form behaves exactly like [`register_string_replacement_if`].
+#[allow(dead_code)]
+pub(crate) fn reroute(original: &str, replacements: &[&str], enabled: fn() -> bool) {
+    register_string_replacement_variants_if(original, replacements, enabled);
+    log(&format!(
+        "ezstate_menu: reroute '{original}' -> [{}] (case-insensitive, substring, random)",
+        replacements.join(", ")
+    ));
+}
+
 /// Address of the candidate to use for `repl`: the single one if there is
 /// only one, otherwise a random pick.
 fn picked_candidate(repl: &StringReplacement) -> usize {

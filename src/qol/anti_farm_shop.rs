@@ -1,18 +1,26 @@
 //! Adds an "Anti-Farm QoL Shop" option to the site-of-grace menu. Selecting it
-//! opens the regular shop UI selling a Gold Firefly and a Four-Toed Fowl Foot
-//! for runes, so the player can skip farming for them.
+//! opens the regular shop UI selling items the player would otherwise have to
+//! farm (Gold Firefly, Four-Toed Fowl Foot, Flight Pinion, Aeonian Butterfly)
+//! for runes.
 //!
 //! Like Glorious Merchant, the shop rows live entirely in this mod's memory:
 //! `SoloParamRepositoryImp::LookupShopLineupParamParamInRange` and `LookupShopLineupParam` are hooked
 //! to serve mod-owned lineup rows for a reserved id range (9500000+), which
 //! vanilla, Convergence, Glorious Merchant and the transmog mod all leave
 //! untouched.
+//!
+//! The lineup is filtered lazily at first use against the live `ShopLineupParam`
+//! table: any item a loaded mod (e.g. Elden Ring Reforged) already sells in
+//! infinite quantity through a real shop row is dropped, so the mod shop only
+//! keeps items that are farm-only or sold in limited stock.
 
 use std::ptr;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
 
+use eldenring::cs::{ShopLineupParam, SoloParam, SoloParamRepository};
 use eldenring::param::SHOP_LINEUP_PARAM;
+use fromsoftware_shared::FromStatic;
 use ilhook::x64::Registers;
 
 use crate::config;
@@ -43,6 +51,16 @@ const FOUR_TOED_FOWL_FOOT: (i32, i32) = (15080, 1000);
 const FLIGHT_PINION: (i32, i32) = (15060, 1000);
 const AEONIAN_BUTTERFLY: (i32, i32) = (20801, 500);
 
+/// Candidate items in shop order. Any candidate the live game already sells in
+/// infinite quantity through a `ShopLineupParam` row is filtered out before the
+/// shop is built.
+const CANDIDATES: [(i32, i32); 4] = [
+    GOLD_FIREFLY,
+    FOUR_TOED_FOWL_FOOT,
+    FLIGHT_PINION,
+    AEONIAN_BUTTERFLY,
+];
+
 /// Equips goods like Kalé's wares.
 const EQUIP_TYPE_GOODS: u8 = 3;
 
@@ -64,17 +82,76 @@ struct ShopResult {
     row: *const SHOP_LINEUP_PARAM,
 }
 
-static LINEUPS: OnceLock<&'static [SHOP_LINEUP_PARAM; 4]> = OnceLock::new();
+static LINEUPS: OnceLock<&'static [SHOP_LINEUP_PARAM]> = OnceLock::new();
 
-fn lineups() -> &'static [SHOP_LINEUP_PARAM; 4] {
+/// True if the live game's `ShopLineupParam` already has a goods row selling
+/// `equip_id` in infinite quantity. Finite-stock rows (e.g. an item a merchant
+/// sells only a handful of) do NOT count, so the anti-farm shop still covers
+/// those. Returns false (keeping the item) whenever the param table can't be
+/// read yet, so a too-early call degrades to the full lineup instead of an
+/// empty shop.
+fn sold_by_game_shop(equip_id: i32) -> bool {
+    let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+        log("anti_farm_shop: SoloParamRepository unavailable; assuming not sold");
+        return false;
+    };
+    let Some(holder) = repo.solo_param_holders.get(ShopLineupParam::INDEX as usize) else {
+        log("anti_farm_shop: ShopLineupParam holder missing; assuming not sold");
+        return false;
+    };
+    if holder.get_res_cap(0).is_none() {
+        log("anti_farm_shop: ShopLineupParam not loaded; assuming not sold");
+        return false;
+    }
+
+    for (row_id, row) in repo.rows::<ShopLineupParam>() {
+        if row.equip_id() == equip_id
+            && row.equip_type() == EQUIP_TYPE_GOODS
+            && row.sell_quantity() == -1
+        {
+            log(&format!(
+                "anti_farm_shop: ShopLineupParam row {row_id} sells {equip_id} with infinite quantity"
+            ));
+            return true;
+        }
+    }
+    false
+}
+
+/// Builds the shop lineup once, dropping any candidate a loaded mod already
+/// sells in infinite quantity. Falls back to the full list if every candidate
+/// is sold infinitely by the game (menu stays functional, just redundant).
+fn lineups() -> &'static [SHOP_LINEUP_PARAM] {
     LINEUPS.get_or_init(|| {
-        let rows = [
-            make_lineup(GOLD_FIREFLY.0, GOLD_FIREFLY.1),
-            make_lineup(FOUR_TOED_FOWL_FOOT.0, FOUR_TOED_FOWL_FOOT.1),
-            make_lineup(FLIGHT_PINION.0, FLIGHT_PINION.1),
-            make_lineup(AEONIAN_BUTTERFLY.0, AEONIAN_BUTTERFLY.1),
-        ];
-        Box::leak(Box::new(rows))
+        let kept: Vec<SHOP_LINEUP_PARAM> = CANDIDATES
+            .iter()
+            .filter(|(equip_id, _)| {
+                if sold_by_game_shop(*equip_id) {
+                    log(&format!(
+                        "anti_farm_shop: skipping {equip_id}: already sold infinitely by a game shop"
+                    ));
+                    return false;
+                }
+                true
+            })
+            .map(|&(equip_id, price)| make_lineup(equip_id, price))
+            .collect();
+
+        let shop = if kept.is_empty() {
+            log("anti_farm_shop: all candidates sold by game shops; serving full lineup");
+            CANDIDATES
+                .iter()
+                .map(|&(equip_id, price)| make_lineup(equip_id, price))
+                .collect::<Vec<_>>()
+        } else {
+            kept
+        };
+        log(&format!(
+            "anti_farm_shop: lineup built with {} of {} candidates",
+            shop.len(),
+            CANDIDATES.len()
+        ));
+        Box::leak(shop.into_boxed_slice())
     })
 }
 

@@ -1,11 +1,10 @@
 //! The "You Died" → replaced-with-a-random-candidate string swap.
 
 use crate::config;
-use crate::ezstate_menu::register_string_replacement_variants_if;
-use crate::log::log;
+use crate::ezstate_menu::reroute;
 
 /// Candidate texts the death screen is randomly replaced with. Edit freely.
-const REPLACEMENTS: &[&str] = &[
+const CANDIDATES: &[&str] = &[
     "SKILL ISSUE",
     "NO BITCHES?",
     "AMONG US",
@@ -21,11 +20,11 @@ const REPLACEMENTS: &[&str] = &[
     "WOW",
     "DAMAGE MANAGED",
     "SKILL CATASTROPHE",
+    "TIM BURTON LAND",
+    "A MIMIR",
+    "PENIS DESTROYED",
+    "FUCKING OBAMA NATION",
 ];
-
-/// Matched case-insensitively and as a substring, so "You Died", "YOU DIED",
-/// and any item or dialog text that mentions it all get swapped.
-const ORIGINAL: &str = "You Died";
 
 /// Live-only gate from the grace menu (no section-wide "silly" toggle).
 fn enabled() -> bool {
@@ -33,9 +32,5 @@ fn enabled() -> bool {
 }
 
 pub(crate) fn init() {
-    register_string_replacement_variants_if(ORIGINAL, REPLACEMENTS, enabled);
-    log(&format!(
-        "silly: registered '{ORIGINAL}' -> [{}] (case-insensitive, substring, random)",
-        REPLACEMENTS.join(", ")
-    ));
+    reroute("You Died", CANDIDATES, enabled);
 }
